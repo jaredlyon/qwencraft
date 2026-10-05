@@ -14,7 +14,7 @@ The client-side `qwencraft` mod adds the following harness responsibilities rath
 | Identity-rich chat | MCPFabric's Fabric callbacks receive but discard `signedMessage` and export only sender name/text; capture the richer Fabric callback directly. [callback][M-chat-hook], [client export][M-chat-events] [D-14] |
 | Operator control | Add F8, physical-input takeover, console pause, and dead-man lease around existing stop primitives. [stop primitive][M-control] [D-11, D-35] |
 | Immediate survival | Existing sustained-use and attack primitives are not the harness's autonomous survival policy; put eat/escape/fight-back reflexes in Java. [use primitive][M-control], [interaction surface][M-interact] [D-32] |
-| Hard guards | Add natural-block/zone checks, chat limits, and command allowlist at agent execution boundaries, not merely in model prompts. [D-10, D-18, D-26, D-29, D-36] |
+| Hard guards | Add natural-block/zone/own-placement checks, chat limits, and command allowlist at agent execution boundaries, not merely in model prompts. [D-10, D-18, D-26, D-49, D-29, D-36] |
 | Watch and recovery | Add client HUD, death/join/disconnect observations, respawn, and bounded reconnect primitives. [D-23, D-24, D-34] |
 
 The tower controller remains the sole bridge client, the terminal remains the only instruction channel, and player chat is conversation rather than permission to act. [D-03, D-05, D-07, D-17]
@@ -80,6 +80,7 @@ All params/results below describe the implemented companion interface; `started`
 | `qc.hud.set` | `{goal?:string,action?:string,thought?:string}` | `{ok:true}` | Update supplied HUD fields, preserving omitted fields; no gameplay action. [D-23] |
 | `qc.config.apply` | `{reflex:ReflexConfig,protect:ProtectConfig,chat:ChatLimits,commandAllowlist:string[],nicknames:Nicknames}` | `{ok:true}` | Apply mod-side hard-guard/reflex configuration and authoritative username/Jared matching; shapes below. [D-10, D-18, D-26, D-29, D-48, D-32, D-36] |
 | `qc.world.state` | `{}` | `{dimension:string,dayTime:number,gameTime:number,raining:boolean,thundering:boolean}` | Read the client level for controller observations, not a server-owned world API; official accessor names are V05. [D-01, D-07] |
+| `qc.placed.near` | `{x:number,y:number,z:number,radius:number}` | `{blocks:{x:number,y:number,z:number,id:string}[]}` | Current joined server+dimension only; radius clamped to 0..16 blocks, nearest first, maximum 64 entries with matching current block ids. Lazily drop stale entries; no world → `RpcException.unavailable`. [D-49] |
 
 **V04 — Goal conversion resolved.** Finite integer-sized coordinates are floored; finite nonnegative range is floored with a 46340 integer-square ceiling, and `targetCount` must be a positive integer. Invalid block IDs/unloaded players are rejected before starting. Goal selection remains y+range → `GoalNear`, y only → `GoalBlock`, no y → `GoalXZ` (ignoring range). [Qc-baritone] [D-08]
 
@@ -104,7 +105,7 @@ These are event `data` contracts; MCPFabric supplies the outer event id/type/gam
 | Baritone observation | Implemented `qc.task.state` | Interpretation |
 |---|---|---|
 | `AT_GOAL` | `at_goal` | Goal signal; the controller verifies position before declaring completion. [path enum][B-path-events] [D-08, D-09, D-42] |
-| `CALC_FAILED` / `NEXT_CALC_FAILED` | `calc_failed` | Diagnostic calculation failure; mining may retry rather than terminate. [path enum][B-path-events], [mine implementation][B-mine-impl] [D-08, D-42] |
+| `CALC_FAILED` / `NEXT_CALC_FAILED` | `calc_failed` | Diagnostic calculation failure; mining may retry, but controller jobs stop after 5 consecutive failures (`MAX_PATH_FAILURES`) instead of waiting for the 120-second budget. Shipped in `a871634`. [controller/skills.ts](../controller/skills.ts) [path enum][B-path-events], [mine implementation][B-mine-impl] [D-08, D-42, D-49] |
 | `CANCELED` / explicit task cancellation | `canceled` | Cancellation signal, not a completion verdict: mining also cancels when its inventory target is met, so the controller checks the postcondition. [path enum][B-path-events], [mine implementation][B-mine-impl] [D-20, D-42] |
 | Owned process becomes inactive or relinquishes control, detected by polling | `lost_control` | Each client tick polls `isActive()` and `mostRecentInControl()` for the owned process; no Baritone-internals mixins or `onLostControl` observer hook. The signal is not an outcome verdict. [Qc-baritone] [D-08, D-32, D-42] |
 
@@ -176,7 +177,9 @@ Reflexes run when `ReflexConfig.enabled=true`, except that hotkey/manual-input p
 
 ## 9. Protection and Baritone settings
 
-`ProtectConfig = {naturalBlocks:string[], zones:{name:string,min:[x,y,z],max:[x,y,z]}[]}`; outside operator zones, only `naturalBlocks` may be broken by any agent path; inside zones, the companion's guarded skill path may break anything. [D-10, D-26]
+`ProtectConfig = {naturalBlocks:string[], zones:{name:string,min:[x,y,z],max:[x,y,z]}[]}`. The existing break mixin permits a block if it is natural, inside an operator zone, or an unchanged tracked agent placement while `!QcState.paused()`. The own-placement exception grants no new permission over Jared's or other players' builds; human takeover retains normal human controls. [D-10, D-26, D-49, D-11] [Qc-break-mixin] [Qc-guards]
+
+Track successful block placements through `MultiPlayerGameMode.useItemOn` while `!QcState.paused()`; this covers controller skills and Baritone pillaring. Placements while paused for **any** reason are human placements and are not tracked. Store `{server,dimension,x,y,z,id}`, with joined server address `host:port` and the namespaced block id observed after placement, in `<gameDir>/config/qwencraft-placed.json`. Load on join; save on change with atomic replacement. When checked, lazily discard entries whose current block id differs (broken or changed); on successful destruction of a tracked position, remove its entry. The new RPC is read-side discovery for this same guard, not independent breaking authority. [D-49] [Qc-break-mixin]
 
 | Setting | Harness value | Verified meaning / caveat |
 |---|---|---|
@@ -189,12 +192,13 @@ Reflexes run when `ReflexConfig.enabled=true`, except that hotkey/manual-input p
 | `prefixControl` | `false` | Separately disable default `#` prefixed command interpretation; outgoing agent `#` text is also rejected by the guard. [command interception][B-chat-control], [default prefix][B-prefix-settings] [D-05, D-08, D-10] |
 | `blocksToDisallowBreaking` | All registered blocks minus `naturalBlocks` | Upstream defines this as blocks Baritone is not allowed to break. [settings][B-disallow-settings] [D-26] |
 | `blocksToAvoidBreaking` | Retain upstream default | Crafting table, furnace, chest, trapped chest: avoidance is not the hard prohibition list. [settings][B-avoid-settings] [D-26] |
+| `logger` | `settings.logger` → `Qc.LOG.info("[Baritone] {}", message.getString())` | Status/failure lines go to the game log, not the chat HUD; shipped in `a871634`. [Qc-baritone] [D-47, D-49] |
 
-[INFERENCE] A block-type disallow list cannot encode coordinates; keep the global Baritone list restrictive even inside free zones, and use the companion-guarded skill path for zone-only breaking. [disallow setting][B-disallow-settings] [D-26] [INFERENCE] A natural-block allowlist also cannot distinguish placed natural blocks from world generation, so this policy is not ownership detection. [disallow setting][B-disallow-settings] [D-26]
+Baritone's block-type disallow list cannot encode coordinates; keep it restrictive even inside free zones or for tracked placements. Baritone cannot route through its own non-natural placed blocks: the model must inspect `ownBlocksNearby` and dig out with `break_block`, rather than retrying the same blocked path. Zone-only breaking likewise uses the companion-guarded skill path. [disallow setting][B-disallow-settings] [D-26, D-49] [Controller](30-controller.md#5-observation-schema) [INFERENCE] A natural-block allowlist still cannot distinguish placed natural blocks from world generation, so tracking adds a narrow exception, not general ownership detection. [D-26, D-49]
 
 Home radius is a controller-only phase-1 bound measured by horizontal x/z distance: reject `go_to`/`explore`/`go_to_player`/`follow_player` targets outside `selfGoal.radius=256`; poll position and stop the job beyond radius + 16. [D-31, D-37, D-39] Baritone's intermediate path itself is not fenced, and there is no mod RPC for a home fence. [D-31, D-37] When `home=null`, the controller sends allowlisted `/home` once, waits for arrival, records that position as `home`, and prints it to the terminal; console `home set` overrides. [D-29, D-40]
 
-**V12 — Hard-guard targets resolved.** Break hooks target `MultiPlayerGameMode.startDestroyBlock`, `continueDestroyBlock` and `destroyBlock`. Send hooks target `ClientPacketListener.sendChat`, `sendCommand` and `sendUnattendedCommand`, including its delayed confirmation lambda. Guards cover raw MCPFabric and Baritone action paths and permit ordinary human control after human takeover. [Qc-break-mixin] [Qc-chat-mixin] [Qc-guards] [D-10, D-11, D-18, D-26] [VERIFY] Complete the raw-path/zone/pause matrix on RayCraft. [D-25, D-38]
+**V12 — Hard-guard targets resolved.** Break hooks target `MultiPlayerGameMode.startDestroyBlock`, `continueDestroyBlock` and `destroyBlock`; D-49 adds placement tracking at `useItemOn` and removal after successful `destroyBlock`. Send hooks target `ClientPacketListener.sendChat`, `sendCommand` and `sendUnattendedCommand`, including its delayed confirmation lambda. Guards cover raw MCPFabric and Baritone action paths and permit ordinary human control after human takeover. [Qc-break-mixin] [Qc-chat-mixin] [Qc-guards] [D-10, D-11, D-18, D-26, D-49] [VERIFY] Complete the raw-path/zone/own-placement/pause matrix on RayCraft. [D-25, D-38]
 
 **V13 — Baritone chat interception implemented.** Both `chatControl=false` and `prefixControl=false` are applied; priority-700 outgoing mixins reject agent `#` text before Fabric/Baritone interception. The local bench observed command allowlist and `#` rejection; [VERIFY] repeat under the live client stack. [Qc-baritone] [Qc-chat-mixin] [Local bench results](50-install-and-verification.md#local-bench--observed-2026-10-04) [D-05, D-08, D-10, D-38]
 

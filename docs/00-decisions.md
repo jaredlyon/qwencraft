@@ -270,13 +270,13 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 ## D-26 — Natural-block allowlist and free zones
 
-**Decision:** outside configured zones, break only `protect.naturalBlocks`; inside operator-defined zones, the harness's own skill path may break any block. On 2026-10-04 the operator accepted the default natural-block list in `qwencraft.config.json` for RayCraft; acceptance is not ownership detection or a universal permission to break placed natural blocks. [D-26, D-02] [qwencraft.config.json](../qwencraft.config.json)
+**Decision:** outside configured zones, break only `protect.naturalBlocks`; inside operator-defined zones, the harness's own skill path may break any block. **Extended by D-49 on 2026-10-04:** the active agent may also break its own tracked, unchanged placements outside zones. On 2026-10-04 the operator accepted the default natural-block list in `qwencraft.config.json` for RayCraft; acceptance is not ownership detection or a universal permission to break placed natural blocks. [D-26, D-49, D-02] [qwencraft.config.json](../qwencraft.config.json)
 
 **Alternatives considered:** unrestricted breaking; no breaking; a block denylist alone cannot express the selected spatial exception. [D-26]
 
 **Evidence:** Baritone has global `blocksToDisallowBreaking` and a separate default avoidance list including crafting tables, furnaces and chests. [Breaking settings][baritone-protect]
 
-**Consequences/risks:** `[INFERENCE]` set Baritone's denylist to all registered block types minus the natural allowlist everywhere; free-zone exceptions belong only to our guarded skill path, not Baritone. [D-26] [Breaking settings][baritone-protect] `[VERIFY]` verify the allowlist against the 26.3 registry and prove all agent break paths reject protected blocks outside zones. [D-26, D-38]
+**Consequences/risks:** set Baritone's denylist to all registered block types minus the natural allowlist everywhere; free-zone and own-placement exceptions belong only to our guarded `break_block` skill path, not Baritone's type-based planner. [D-26, D-49] [Breaking settings][baritone-protect] [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java) `[VERIFY]` verify the allowlist against the 26.3 registry and prove all agent break paths reject protected blocks outside zones unless they are unchanged tracked agent placements. [D-26, D-49, D-38]
 
 ## D-27 — Cache-based mining with accepted appearance risk
 
@@ -505,6 +505,18 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 **Evidence:** operator text: “retune the system so the agent only speaks in chat when the mc username is directly mentioned (also include 'jared' to that list because my name is jared)”. Follow-up ruling: “whispers (/msg to the account) always count as addressing the agent”. [D-48]
 
 **Consequences/risks:** the mod's `mentionsMe` remains authoritative; an incoming non-self `player` message must have that flag, while an incoming non-self `whisper` qualifies independently. The current-request `recentChat`/`mustReply` gate rejects other chat tool attempts with `chat is only for replying to a message that mentions you`. Addressing permits conversation, never gameplay instructions; own echoes, system messages and old rolling-history chat cannot authorize a reply. Direct operator chat, console `say <text>`, silent control transitions and allowlisted commands are unchanged. [D-48, D-14, D-17, D-36, D-47]
+
+## D-49 — Agent-owned block breaking
+
+**Decision:** the agent may break blocks it placed itself; Jared's and other players' builds receive no new breaking permission. Track successful client block placements through `MultiPlayerGameMode.useItemOn` only while `!QcState.paused()`; this includes controller skills and Baritone pillaring. Placements while paused for any reason are treated as human and are not tracked. This extends D-26. Date: 2026-10-04; source: operator follow-up adjudication. [D-49, D-26, D-11]
+
+**Alternatives considered:** keep strict natural-only protection outside zones; mark the shelter as a free zone. Both were offered and rejected in favor of permission scoped to the agent's own placements. [D-49]
+
+**Evidence:** the operator-observed RayCraft incident: the agent boxed itself inside its own cobblestone shelter, but cobblestone was absent from the natural-block list. Baritone repeatedly logged `Unable to find any path ... deepslate_iron_ore` and emitted `qc.task` `calc_failed` events while the agent remained inside the shelter, roughly every 2 seconds. This incident is not completion of D-38's live acceptance suite. [D-49, D-26, D-38]
+
+**Consequences/risks:** persist entries `{server,dimension,x,y,z,id}` in `<gameDir>/config/qwencraft-placed.json`, load on join, and save changes atomically; `server` is the joined `host:port` and `id` is the namespaced block id observed after placement. Lazily drop entries whose current block id differs; remove a tracked entry on successful break. The guard permits natural blocks, free-zone blocks, or an unchanged tracked placement while the agent is active. `qc.placed.near` exposes nearby tracked placements to observation `ownBlocksNearby`; the model uses `break_block` to dig out. Baritone remains type-based (`blocksToDisallowBreaking`) and cannot route through own non-natural blocks; do not widen its denylist to grant permission over other players' builds. Tracking is not general ownership detection, nor does it remove D-26's natural-type/zone protection limits. [D-49, D-26] [Companion contract](20-companion-mod.md#9-protection-and-baritone-settings) [Controller observation](30-controller.md#5-observation-schema)
+
+Related fixes already shipped in commit `a871634`: controller jobs end after `MAX_PATH_FAILURES=5` consecutive Baritone path-calculation failures rather than waiting for the 120-second budget; `settings.logger` in `BaritoneFeature` sends status/failure lines to the game log instead of the chat HUD. These bound/report the failure but do not grant permission to dig through the shelter. [controller/skills.ts](../controller/skills.ts) [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java)
 
 ## Tensions accepted by the operator
 

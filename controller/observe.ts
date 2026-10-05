@@ -57,6 +57,22 @@ export async function observe(env: SkillEnv, extra: { goal: string | null; lastR
       return [field, null] as const;
     }
   })));
+  try {
+    const player = record(values.player);
+    const { x, y, z } = player;
+    if (![x, y, z].every(v => typeof v === "number" && Number.isFinite(v))) throw new Error("player position unavailable");
+    const placed = record(await env.bridge.rpc("qc.placed.near", { x, y, z, radius: 6 }, { signal: env.signal }));
+    if (!Array.isArray(placed.blocks)) throw new Error("placed blocks unavailable");
+    values.ownBlocksNearby = placed.blocks.slice(0, 32).map((raw): [number, number, number, string] => {
+      const b = record(raw);
+      if (typeof b.x !== "number" || !Number.isFinite(b.x) || typeof b.y !== "number" || !Number.isFinite(b.y) || typeof b.z !== "number" || !Number.isFinite(b.z) || typeof b.id !== "string") throw new Error("placed block unavailable");
+      return [b.x, b.y, b.z, b.id];
+    });
+    acquiredAt.ownBlocksNearby = Date.now();
+  } catch (error) {
+    unavailable.ownBlocksNearby = error instanceof Error ? error.message : String(error);
+    values.ownBlocksNearby = null;
+  }
   env.signal.throwIfAborted();
   const rawInventory = values.inventory;
   if (rawInventory !== null) {
@@ -73,7 +89,7 @@ export async function observe(env: SkillEnv, extra: { goal: string | null; lastR
   const notes = env.notes.get();
   // Put must-consider messages first so a large ambient batch cannot crowd them out.
   const chat = [...extra.recentChat].sort((a, b) => Number(b.mentionsMe || b.kind === "whisper") - Number(a.mentionsMe || a.kind === "whisper"));
-  const budgets: Record<string, number> = { session: 500, player: 1100, inventory: 2700, effects: 600, terrain: 2800, entities: 2000, timeWeather: 300, control: 300, task: 500, recentChat: 1800, lastResult: 900, hints: 500, goals: 500, zones: 400 };
+  const budgets: Record<string, number> = { session: 500, player: 1100, inventory: 2700, effects: 600, terrain: 2800, entities: 2000, timeWeather: 300, control: 300, task: 500, ownBlocksNearby: 2200, recentChat: 1800, lastResult: 900, hints: 500, goals: 500, zones: 400 };
   const observation: Observation = { ...values, goals: extra.goal === null ? [] : [extra.goal], home: notes.home ?? env.config.home, zones: [...env.config.protect.zones, ...notes.zones], recentChat: chat, lastResult: extra.lastResult, hints: extra.hints };
   for (const [field, budget] of Object.entries(budgets)) observation[field] = compact(observation[field], budget, field, omitted);
   observation.metadata = { at, acquiredAt, unavailable, omitted, scanRadiusUnit: "chunks", entityRadiusUnit: "blocks", chatOrder: "addressed-first", terrainScope: "loaded chunks only", entityLimit: 64 };

@@ -222,6 +222,7 @@ test("notes writes are serialized/atomic, corrupt reads preserve data, and serve
 
 test("observations aggregate inventory, label failures/truncation and keep client world sources", async () => {
   const seen: string[] = [];
+  let placedUnavailable = false;
   const values: Record<string, unknown> = {
     "session.info": { worldId: "mp:localhost", dimension: "minecraft:overworld" },
     "player.getState": { x: 0, y: 64, z: 0, health: 20, food: 14 },
@@ -231,13 +232,23 @@ test("observations aggregate inventory, label failures/truncation and keep clien
     "perception.entities": { entities: [{ kind: "hostile", uuid: "mob", x: 1, y: 64, z: 1, distance: 1 }] },
     "qc.world.state": { dimension: "minecraft:overworld", dayTime: 100, gameTime: 100, raining: false, thundering: false },
     "qc.control.state": { paused: false, reason: null }, "qc.baritone.status": { active: false },
+    "qc.placed.near": { blocks: Array.from({ length: 40 }, (_, x) => ({ x, y: 64, z: 0, id: "minecraft:cobblestone" })) },
   };
   const env: SkillEnv = { config, notes: { get: () => emptyNotes, update: async () => {} }, events: { on: () => () => {}, next: async () => null }, signal: new AbortController().signal, log() {}, chat: createChatPolicy(config, recordingBridge().bridge, emptyHost, () => ctx),
-    bridge: { health: async () => true, async rpc<T = unknown>(method: string): Promise<T> { seen.push(method); if (method === "player.getStatusEffects") throw Error("unavailable"); return values[method] as T; } },
+    bridge: { health: async () => true, async rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+      seen.push(method);
+      if (method === "player.getStatusEffects") throw Error("unavailable");
+      if (method === "qc.placed.near") {
+        assert.deepEqual(params, { x: 0, y: 64, z: 0, radius: 6 });
+        if (placedUnavailable) throw Error("placed unavailable");
+      }
+      return values[method] as T;
+    } },
   };
   const obs = await observe(env, { goal: "food", lastResult: null, recentChat: [event("hi")], hints: [] });
   const inventory = obs.inventory as Record<string, unknown>;
   assert.deepEqual(inventory.counts, { "minecraft:apple": 5 });
+  assert.deepEqual(obs.ownBlocksNearby, Array.from({ length: 32 }, (_, x) => [x, 64, 0, "minecraft:cobblestone"]));
   assert.equal(obs.effects, null);
   const metadata = obs.metadata as { unavailable: Record<string, string>; omitted: string[] };
   assert.equal(metadata.unavailable.effects, "unavailable");
@@ -245,6 +256,14 @@ test("observations aggregate inventory, label failures/truncation and keep clien
   assert.ok(seen.includes("qc.world.state") && !seen.some(name => name.startsWith("world.")));
   assert.ok(JSON.stringify(obs).length < 16000);
   assert.deepEqual(await tickSnapshot(env), { health: 20, food: 14, pos: [0, 64, 0], hostilesNear: 1, paused: false });
+  placedUnavailable = true;
+  const failed = await observe(env, { goal: null, lastResult: null, recentChat: [], hints: [] });
+  assert.equal(failed.ownBlocksNearby, null);
+  const failedMetadata = failed.metadata;
+  assert.ok(failedMetadata && typeof failedMetadata === "object" && "unavailable" in failedMetadata);
+  const failedUnavailable = failedMetadata.unavailable;
+  assert.ok(failedUnavailable && typeof failedUnavailable === "object" && "ownBlocksNearby" in failedUnavailable);
+  assert.equal(failedUnavailable.ownBlocksNearby, "placed unavailable");
 });
 
 test("redaction preserves code identifiers, repo-relative names and the DGX Spark product phrase", () => {

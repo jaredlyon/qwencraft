@@ -24,7 +24,7 @@ test("RCON wire encoding and file SHA-256 have independent known values", async 
 test("bench config uses isolated ports and config-relative paths", () => {
   const config = loadConfig(fileURLToPath(new URL("./qwencraft.bench.json", import.meta.url)));
   assert.deepEqual(config.server, { host: "127.0.0.1", port: 25570 });
-  assert.equal(config.bridge.url, "http://127.0.0.1:25599");
+  assert.equal(config.bridge.url, "http://127.0.0.1:25600");
   assert.equal(config.bridge.configPath, fileURLToPath(new URL("../mod/run/config/mcpfabric.config.json", import.meta.url)));
   assert.equal(config.paths.heuristicsDir, fileURLToPath(new URL("../heuristics", import.meta.url)));
   assert.equal(config.paths.notesFile, fileURLToPath(new URL("./server/bench-notes.json", import.meta.url)));

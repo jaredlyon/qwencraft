@@ -53,7 +53,13 @@ public final class GuardsFeature {
 		ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, type, timestamp) ->
 				receive(message.getString(), sender, signedMessage, type));
 		ClientReceiveMessageEvents.GAME.register((message, overlay) -> receive(message.getString(), null, null, null));
-		ClientPlayConnectionEvents.DISCONNECT.register((connection, client) -> recentSent.clear());
+		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
+				client.execute(() -> PlacedBlocks.joined(handler)));
+		ClientPlayConnectionEvents.DISCONNECT.register((connection, client) -> client.execute(() -> {
+			recentSent.clear();
+			PlacedBlocks.disconnected();
+		}));
+		Qc.register("qc.placed.near", ctx -> Qc.onMain(() -> PlacedBlocks.near(ctx.params())));
 		Qc.register("qc.chat.send", ctx -> {
 			JsonObject params = ctx.params();
 			if (params == null || !params.has("text") || !params.get("text").isJsonPrimitive()
@@ -91,7 +97,8 @@ public final class GuardsFeature {
 		for (QcState.Zone zone : config.zones()) {
 			if (zone.contains(pos.getX(), pos.getY(), pos.getZ())) return true;
 		}
-		return config.naturalBlocks().contains(client.level.getBlockState(pos).getBlock());
+		return config.naturalBlocks().contains(client.level.getBlockState(pos).getBlock())
+				|| (!QcState.paused() && PlacedBlocks.contains(pos));
 	}
 
 	/** One reservation shared by public chat, commands, RPCs and raw MCPFabric sends. Main thread only. */

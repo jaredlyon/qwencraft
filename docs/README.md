@@ -6,11 +6,13 @@ Status: Phase-1 harness implemented; bench-verified; RayCraft acceptance pending
 
 Other players see chat only when Jared types in-game himself (or uses unchanged operator-console `say <text>`) or the agent replies to an incoming non-self addressed message: `SirWaffleshnoz` (case-insensitive substring), `jared` (case-insensitive whole word), or any whisper. Activation and control changes are silent. Code rejects the agent's chat tools with `chat is only for replying to a message that mentions you` unless the current request contains an incoming non-self `player` message with `mentionsMe=true` or a `whisper` in observation `recentChat` or pending `mustReply`. Non-addressed chat is context only for the next turn and does not wake the model; allowlisted commands such as `/home` remain separate. [D-48](00-decisions.md#d-48--addressed-only-agent-chat) [D-47](00-decisions.md#d-47--reply-only-agent-chat)
 
+The active agent may break its own tracked, unchanged placements; all placements during any pause are human and not tracked. `qc.placed.near` feeds observation `ownBlocksNearby`, and the model digs out of its own shelter with `break_block` because Baritone remains type-based and cannot route through own non-natural blocks. The existing natural-block/free-zone policy is otherwise unchanged. [D-49](00-decisions.md#d-49--agent-owned-block-breaking) · [Protection contract](20-companion-mod.md#9-protection-and-baritone-settings)
+
 ## Documents
 
 | File | Contents |
 |---|---|
-| [00-decisions.md](00-decisions.md) | Decision log D-00…D-48: what was chosen, which alternatives were considered, the evidence, and the tensions the operator accepted |
+| [00-decisions.md](00-decisions.md) | Decision log D-00…D-49: what was chosen, which alternatives were considered, the evidence, and the tensions the operator accepted |
 | [10-architecture.md](10-architecture.md) | Ground truth, process topology, layering, agent loop, latency budget, failure domains |
 | [20-companion-mod.md](20-companion-mod.md) | The `qwencraft` Fabric mod: Baritone RPCs, chat hook, stop controls, reflexes, protect guard, HUD |
 | [30-controller.md](30-controller.md) | The TypeScript controller: bridge client, LLM client, curated tools, observations, heuristics API, memory, console |

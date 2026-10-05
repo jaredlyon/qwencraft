@@ -40,7 +40,7 @@ export function itemCount(value: unknown, id: string): number {
 }
 export function inventoryDelta(before: unknown, after: unknown, id: string): number { return itemCount(after, id) - itemCount(before, id); }
 export function isProtected(c: Config, notes: Readonly<Notes>, id: string, p: Vec3): boolean {
-  return !c.protect.naturalBlocks.includes(id) || [...c.protect.zones, ...notes.zones].some(z => p.every((v, i) => v >= z.min[i]! && v <= z.max[i]!));
+  return !c.protect.naturalBlocks.includes(id) && ![...c.protect.zones, ...notes.zones].some(z => p.every((v, i) => v >= z.min[i]! && v <= z.max[i]!));
 }
 export function goalSatisfied(p: Vec3, args: ObjectValue): boolean {
   const x = Math.floor(number(args.x)), z = Math.floor(number(args.z));
@@ -529,7 +529,10 @@ async function dispatch(name: string, args: ObjectValue, s: Skill): Promise<Tool
     case "place_block": return place(s, itemId(string(args.item)), pos(args), args.face === undefined ? "up" : string(args.face));
     case "break_block": {
       const p = pos(args), before = await s.block(p, true), id = string(before.id);
-      if (isProtected(env.config, env.notes.get(), id, p)) throw new Error("protected block");
+      if (isProtected(env.config, env.notes.get(), id, p)) {
+        const placed = await s.rpc("qc.placed.near", { ...coordinates(p), radius: 0 }).catch(() => ({ blocks: [] }));
+        if (!list(placed.blocks).some(b => b.x === p[0] && b.y === p[1] && b.z === p[2] && b.id === id)) throw new Error("protected block");
+      }
       if (before.canHarvest !== true || number(before.hardness) < 0) throw new Error("cannot harvest");
       await s.go(p);
       await s.rpc("inventory.selectHotbar", { slot: number(before.bestSlot) });

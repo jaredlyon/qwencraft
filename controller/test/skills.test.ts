@@ -78,9 +78,57 @@ test("break protection is natural-allowlist plus inclusive configured and rememb
   const c = { protect: { naturalBlocks: ["minecraft:stone"], zones: [{ name: "base", min: [0, 0, 0], max: [4, 4, 4] }] } } as Config;
   const notes: Notes = { home: null, zones: [{ name: "remembered", min: [10, 10, 10], max: [11, 11, 11] }], places: [] };
   assert.equal(isProtected(c, notes, "minecraft:stone", [5, 4, 4]), false);
-  assert.equal(isProtected(c, notes, "minecraft:stone", [4, 4, 4]), true);
-  assert.equal(isProtected(c, notes, "minecraft:stone", [10, 10, 10]), true);
+  assert.equal(isProtected(c, notes, "minecraft:stone", [4, 4, 4]), false);
+  assert.equal(isProtected(c, notes, "minecraft:stone", [10, 10, 10]), false);
+  assert.equal(isProtected(c, notes, "minecraft:crafting_table", [4, 4, 4]), false);
+  assert.equal(isProtected(c, notes, "minecraft:crafting_table", [10, 10, 10]), false);
   assert.equal(isProtected(c, notes, "minecraft:crafting_table", [100, 0, 0]), true);
+});
+
+test("break_block allows protected blocks only with an exact tracked position and id", async () => {
+  const target = { x: 1, y: 64, z: 0 };
+  const id = "minecraft:cobblestone";
+  for (const blocks of [
+    [{ ...target, id }],
+    [],
+    [{ ...target, x: 2, id }],
+    [{ ...target, y: 65, id }],
+    [{ ...target, z: 1, id }],
+    [{ ...target, id: "minecraft:stone" }],
+    null,
+  ]) {
+    let broken = false, checked = false;
+    const unused = (): never => { throw new Error("unexpected test dependency"); };
+    const env: SkillEnv = {
+      bridge: {
+        health: async () => true,
+        async rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+          if (method === "perception.blocks") return { blocks: [{ ...target, loaded: true, id: broken ? "minecraft:air" : id, air: broken, canHarvest: true, hardness: 2, bestSlot: 0 }] } as T;
+          if (method === "qc.placed.near") {
+            checked = true;
+            assert.deepEqual(params, { ...target, radius: 0 });
+            if (blocks === null) throw new Error("unavailable");
+            return { blocks } as T;
+          }
+          if (method === "player.getState") return { x: 0, y: 64, z: 0 } as T;
+          if (method === "interact.breakBlock") broken = true;
+          return {} as T;
+        },
+      },
+      config: { home: null, selfGoal: { radius: 256 }, protect: { naturalBlocks: ["minecraft:stone"], zones: [] } } as unknown as Config,
+      notes: { get: () => ({ home: [0, 64, 0], zones: [], places: [] }), update: unused },
+      events: { on: unused, next: unused },
+      chat: { route: unused, say: unused, reply: unused },
+      signal: new AbortController().signal,
+      log: unused,
+    };
+    const answer = await TOOLS.find(t => t.name === "break_block")!.run(target, env);
+    const owned = blocks?.some(b => b.x === target.x && b.y === target.y && b.z === target.z && b.id === id) ?? false;
+    assert.equal(checked, true);
+    assert.equal(answer.ok, owned);
+    assert.equal(broken, owned);
+    assert.equal(answer.summary, owned ? `Removed ${id}` : "protected block");
+  }
 });
 
 test("finish_goal accepts free-form summaries after success or an explicit abandoned prefix", async () => {

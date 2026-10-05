@@ -1,6 +1,6 @@
 # Local phase-1 bench
 
-This is a disposable **Paper 26.3 build 151** server, not RayCraft acceptance. The visible Fabric development client plays as `QwenBench` in `mod/run/`; nothing here installs into the user's real `.minecraft`. Close the real Minecraft client first so its bridge does not occupy port 25599.
+This is a disposable **Paper 26.3 build 151** server, not RayCraft acceptance. The visible Fabric development client plays as `QwenBench` in `mod/run/`; nothing here installs into the user's real `.minecraft`. The development bridge uses port **25600**, so the bench can run while the real client (bridge 25599) is open.
 
 Prerequisites: Node 24.12+, the checked-in Gradle wrapper/vendor JARs, and JDK 25 at `D:/qwencraft/.tools/jdk-25.0.4.1+1`. No npm runtime dependencies or TypeScript build step are needed. Spark's existing `qwen3.8-flash-next` endpoint must be reachable at `http://192.168.100.2:8000/v1`; do not restart/reconfigure that shared service.
 
@@ -38,7 +38,7 @@ Prerequisites: Node 24.12+, the checked-in Gradle wrapper/vendor JARs, and JDK 2
    $path = 'mod/run/config/mcpfabric.config.json'
    $bridge = Get-Content $path -Raw | ConvertFrom-Json
    $bridge.host = '127.0.0.1'
-   $bridge.port = 25599
+   $bridge.port = 25600
    $bridge.requireAuth = $true
    $bridge.enableWorldWrite = $false
    $bridge.enableCommands = $false
@@ -114,7 +114,7 @@ node bench/rcon.ts "stop"
 
 Paper may close RCON before the reply marker; in that case the CLI reports an incomplete response even though the server is stopping. Confirm `Saving`/`Stopping` and exit in Terminal A. Alternatively type `stop` directly in Terminal A. Its launcher forwards console input; Ctrl+C also requests a normal stop.
 
-The bench owns only `bench/server/` (world, Paper cache, `server.properties`, EULA, `rcon.secret`, and `bench-notes.json`) and `bench/logs/`. Game port **25570**, RCON **25575**, and bridge **25599** bind to loopback. Offline-mode is strictly for this local bench; never expose it to the network. Treat `rcon.secret` and the password-bearing `server.properties` as private; the launcher preserves its random secret across starts. All config-relative paths resolve against `bench/qwencraft.bench.json`'s directory. Existing worlds/notes are not reset by the launcher.
+The bench owns only `bench/server/` (world, Paper cache, `server.properties`, EULA, `rcon.secret`, and `bench-notes.json`) and `bench/logs/`. Game port **25570**, RCON **25575**, and development bridge **25600** bind to loopback. Offline-mode is strictly for this local bench; never expose it to the network. Treat `rcon.secret` and the password-bearing `server.properties` as private; the launcher preserves its random secret across starts. All config-relative paths resolve against `bench/qwencraft.bench.json`'s directory. Existing worlds/notes are not reset by the launcher.
 
 The RCON CLI collects split replies using a read-only `list` marker after the requested command; the marker's reply is not printed. Both CLIs exit nonzero on failure and never retry a mutation automatically. The RPC CLI prints the successful result as JSON, or an error envelope on stderr.
 

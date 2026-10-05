@@ -36,6 +36,6 @@
   "reconnect": {"maxPerHour": 3, "backoffMs": [30000, 120000, 600000], "stopPatterns": ["ban", "banned", "kicked by"]},
   "lease": {"ttlMs": 3000, "intervalMs": 1000},
   "server": {"host": "127.0.0.1", "port": 25570},
-  "bridge": {"url": "http://127.0.0.1:25599", "configPath": "../mod/run/config/mcpfabric.config.json"},
+  "bridge": {"url": "http://127.0.0.1:25600", "configPath": "../mod/run/config/mcpfabric.config.json"},
   "paths": {"heuristicsDir": "../heuristics", "notesFile": "server/bench-notes.json", "transcriptDir": "logs"}
 }
