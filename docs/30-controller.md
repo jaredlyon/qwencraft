@@ -100,13 +100,15 @@ The captured endpoint emitted native `tool_calls`, exposed reasoning in `message
 
 The captured template reads `reasoning_content` and preserves historical thinking when `preserve_thinking` is undefined/true (or the assistant turn follows the last user query); `enable_thinking=false` suppresses reasoning-effort instructions and changes the generation prefix, but does not remove historical reasoning already supplied. [LLM-template]
 
-Strip `reasoning`, `reasoning_content`, and historical `<think>…</think>` content from replayed assistant history; retain final assistant content and tool-call IDs/arguments, and append each result as the matching tool message. Do not copy reasoning into public chat, HUD `thought`, memory summaries, or notes. [D-21] [D-23] [D-33]
+Strip `reasoning`, `reasoning_content`, and historical `<think>…</think>` content from replayed assistant history; retain final assistant content and tool-call IDs/arguments, and append each result as the matching tool message. Do not copy reasoning into public chat, the HUD, memory summaries, or notes. Final model prose is printed to the console only, never used as HUD action text. [Ctl-loop] [D-21] [D-23] [D-33]
 
 Qwen's pinned parser supports consecutive tool calls; execute a returned batch sequentially, never concurrently, with fresh guard/postcondition checks between calls and a generation check before each call. [D-09] [D-20] [V-parser]
 
 No tool may execute until the complete response and arguments have been validated; unknown tools, invalid JSON, ambiguous IDs, or invalid finite coordinates/counts produce a tool failure, not raw-RPC fallback or guessed actions. [D-09] [D-10]
 
 Keep one request in flight, including aborted generations until locally settled; enforce request deadlines of 30 seconds normally and 90 seconds for thinking-enabled planning, with the outage behavior in §6. [D-11] [D-20] [D-21] [INFERENCE: orchestrator default]
+
+**2026-10-04 compaction fix:** History compaction sent `tools: []`; vLLM returned HTTP 400, causing the loop to back off and show the old `LLM unavailable` action after every turn even while tasks were progressing. [controller/llm.ts](../controller/llm.ts) now omits empty tools from the request and includes the error response body in `LLM HTTP <code>: <text>`. Compaction failures are also logged through `deps.log` with their error message; the HUD reports retry status rather than replacing the last tool action with an outage label. [Ctl-loop]
 
 The built request sets `max_tokens=1024` normally and `4096` for thinking turns, with `preserve_thinking:false` and the 30/90-second deadlines above. These are bounded implementation defaults, not measured guarantees under concurrent Spark load. [Ctl-llm] [D-21] [INFERENCE: load caveat]
 
@@ -209,9 +211,22 @@ Wake planning for a new console instruction, incoming non-self addressed chat (`
 2. Request the model with thinking only for a new console-instruction plan or failed-tool replan on that instruction; all other wakes run without thinking. Preserve terminal authority and untrusted chat separation. [D-05, D-17, D-21, D-46]
 3. Reject a response whose generation changed; validate tools, apply `onPlanProposed` hooks, then revalidate rewritten arguments against the same hard guards. [D-09] [D-20] [D-25]
 4. Execute one skill, track its task/menu/input ownership, wait for observations or bounded completion, and return actual deltas. Between calls recheck pause, generation, target validity and home policy. [D-09] [D-11] [D-20] [D-37]
-5. Append final assistant/tool history and JSONL records, update HUD with a short public-facing goal/action/explanation, then process pending wakes. [D-23] [D-33]
+5. Append final assistant/tool history and JSONL records, print model prose to the console only, then process pending wakes; set HUD status to `Idle` when the turn finishes with no queued wakes. [Ctl-loop] [D-23] [D-33]
 
 The loop owns the goal stack; skills communicate goal mutations only through successful `set_goal`/`finish_goal` `observedDelta` results. This is separate from remembered places and prevents skill/notes state from competing with loop authority. [Ctl-loop] [Ctl-skills] [D-09, D-19, D-20, D-33]
+
+The loop updates `qc.hud.set` with `{goal?:string,action?:string,status?:string}` → `{ok:true}`; omitted fields are unchanged and an empty string clears a field. The four-line HUD is pause/active header, `Goal: <goal>`, `Action: <action>`, and `Status: <status>`. The mod appends ` (<N>s)` after status text has remained unchanged for at least 2 seconds, counting whole seconds since its last change and truncating lines to screen width. [Ctl-loop] [Mod](20-companion-mod.md#10-hud-and-session-lifecycle)
+
+| Loop phase | Exact HUD status |
+|---|---|
+| Before a planning request with thinking off | `Waiting for Qwen` |
+| Before a planning request with thinking on | `Qwen is thinking` |
+| Before history compaction | `Summarizing memory` |
+| While a tool runs | `Running <tool>` |
+| Turn finished with no queued wakes | `Idle` |
+| LLM failure/backoff | `Qwen unreachable, retrying in <N>s` (N is seconds until `retryAt`) |
+
+At tool start, action is `<tool> <compact args>`, with arguments serialized as compact JSON and truncated to 60 characters. At completion, action is `<tool>: done, <summary>` or `<tool>: failed, <summary>`, truncated to 120 characters. Preserve this factual tool activity instead of overwriting it with model prose. [Ctl-loop] [D-23]
 
 A new free-text console instruction increments generation immediately, aborts inference/skill waits, performs shared stop cleanup, observes settled state, then replans; an old response/task event cannot start or finish the replacement goal. Mindcraft's action manager is a cancellation precedent, not the selected chat-authority policy. [D-05] [D-20] [MC-manager]
 
@@ -219,7 +234,7 @@ Incoming addressed chat alone does not gain body authority or replace a console 
 
 `qc.task` reports only `at_goal`, `calc_failed`, `canceled`, or `lost_control`; none is a final success flag. Reconcile the matching task/status and fresh position/inventory postcondition before the controller alone declares `done`/`failed`; record cancellation/partial progress rather than completing an obsolete generation. A calculation failure may leave mining retrying, and loss of control can accompany normal arrival, so signals must be interpreted with lifecycle state and observations; inactivity alone is not success, and `isPathing()` can be false while paused. [D-08] [D-09] [D-20] [D-42] [B-events] [B-mine] [B-lifecycle] [B-path]
 
-On LLM timeout/error, an already-running deterministic, guarded skill may finish, but no new skill starts; suspend idle self-goal steps, set HUD action to `LLM unavailable`, and retry after 5/15/60 seconds, then every 60 seconds. Console, lease heartbeat and normal mod guards/reflexes continue; successful inference must still pass the current generation and pause checks. [D-11] [D-19] [D-20] [D-23] [D-32] [INFERENCE: orchestrator outage default]
+On LLM timeout/error, an already-running deterministic, guarded skill may finish, but no new skill starts; suspend idle self-goal steps, preserve the last tool action, set HUD status to `Qwen unreachable, retrying in <N>s` (N is seconds until `retryAt`), and retry after 5/15/60 seconds, then every 60 seconds. Console, lease heartbeat and normal mod guards/reflexes continue; successful inference must still pass the current generation and pause checks. Compaction failures also log their error message through `deps.log`. [Ctl-loop] [D-11] [D-19] [D-20] [D-23] [D-32]
 
 Hermes also uses Spark-local `http://127.0.0.1:8000/v1`; the endpoint is shared rather than reserved to Minecraft. [Hermes-evidence]
 

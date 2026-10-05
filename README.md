@@ -37,6 +37,14 @@ Thinking is reserved for planning a new console instruction and a replan after a
 
 Write a default-export heuristic in `heuristics/*.ts`; see [heuristics/README.md](heuristics/README.md) and [example-food.ts](heuristics/example-food.ts) for hooks, priority, vetoes and hot reload. Plugins are trusted local code, not a sandbox for chat/model-generated code. [D-25](docs/00-decisions.md#d-25--user-heuristic-hooks-and-hot-reload)
 
+## In-game HUD
+
+The client-only overlay shows four lines: green `Qwen active` or red `PAUSED (<reason>)`, then `Goal: <goal>`, `Action: <action>`, and `Status: <status>`, truncated to screen width. `qc.hud.set` takes `{goal?:string,action?:string,status?:string}` → `{ok:true}`; omitted fields stay unchanged and empty strings clear them. After status text remains unchanged for at least 2 seconds, the mod appends ` (<N>s)`, counting whole seconds since its last change. [HUD contract](docs/20-companion-mod.md#10-hud-and-session-lifecycle)
+
+Action reflects tool execution: `<tool> <compact args>` at start (compact JSON arguments truncated to 60 characters), then `<tool>: done, <summary>` or `<tool>: failed, <summary>` (action truncated to 120 characters). Model prose is printed only to the console. Status is `Waiting for Qwen`, `Qwen is thinking`, `Summarizing memory`, `Running <tool>`, `Idle`, or `Qwen unreachable, retrying in <N>s` (N is seconds until `retryAt`), according to the actual loop phase. [controller/loop.ts](controller/loop.ts)
+
+**2026-10-04 HUD/compaction fix:** Compaction sent `tools: []`, which vLLM rejected with HTTP 400; the loop consequently backed off and showed the old `LLM unavailable` action after every turn despite task progress. Empty tools are now omitted, HTTP errors include the response body as `LLM HTTP <code>: <text>`, and compaction failures log the error message to the console. Retry state appears in Status rather than overwriting the last tool action. [controller/llm.ts](controller/llm.ts) · [Controller policy](docs/30-controller.md#3-llm-request-and-history-policy)
+
 ## Safety and pending live install
 
 F8/manual takeover relinquish controls **and disable Java reflexes**. Console `stop`/`quit` and the 3-second dead-man lease cancel planned work but leave survival reflexes active; use a safe full-food fixture for those checks. **F8/manual takeover still require operator physical-input testing.** [Stop semantics](docs/40-chat-and-safety.md#6-stop-precedence-and-residual-reflexes) · [Bench scope](docs/50-install-and-verification.md#local-bench--observed-2026-10-04)

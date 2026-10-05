@@ -29,7 +29,8 @@ public final class ControlFeature {
 	private static boolean ownInput;
 	private static long leaseRenewedAt;
 	private static long leaseTtlMs = 3000;
-	private static String goal = "", action = "", thought = "";
+	private static String goal = "", action = "", status = "";
+	private static long statusChangedAt = System.nanoTime();
 
 	private ControlFeature() {}
 
@@ -84,9 +85,9 @@ public final class ControlFeature {
 		Qc.register("qc.control.state", ctx -> Qc.onMain(() -> pauseSnapshot(true)));
 		Qc.register("qc.hud.set", ctx -> {
 			JsonObject p = ctx.params();
-			String g = optionalString(p, "goal"), a = optionalString(p, "action"), t = optionalString(p, "thought");
+			String g = optionalString(p, "goal"), a = optionalString(p, "action"), s = optionalString(p, "status");
 			return Qc.onMain(() -> {
-				setHud(g, a, t);
+				setHud(g, a, s);
 				JsonObject out = Qc.obj(); out.addProperty("ok", true); return out;
 			});
 		});
@@ -100,10 +101,16 @@ public final class ControlFeature {
 	}
 
 	/** Null means omitted, while an empty string explicitly clears a field. */
-	public static void setHud(String newGoal, String newAction, String newThought) {
+	public static void setHud(String newGoal, String newAction, String newStatus) {
 		if (newGoal != null) goal = newGoal.replace('\n', ' ').replace('\r', ' ');
 		if (newAction != null) action = newAction.replace('\n', ' ').replace('\r', ' ');
-		if (newThought != null) thought = newThought.replace('\n', ' ').replace('\r', ' ');
+		if (newStatus != null) {
+			String cleanedStatus = newStatus.replace('\n', ' ').replace('\r', ' ');
+			if (!status.equals(cleanedStatus)) {
+				status = cleanedStatus;
+				statusChangedAt = System.nanoTime();
+			}
+		}
 	}
 
 	private static void renderHud(GuiGraphicsExtractor graphics) {
@@ -111,11 +118,13 @@ public final class ControlFeature {
 		if (mc.player == null || mc.gui.hud.isHidden()) return;
 		int width = Math.max(0, graphics.guiWidth() - 12);
 		graphics.fill(3, 3, graphics.guiWidth() - 3, 49, 0x90000000);
-		String status = QcState.paused() ? "PAUSED (" + QcState.pauseReason().wire + ")" : "Qwen active";
-		graphics.text(mc.font, mc.font.plainSubstrByWidth(status, width), 6, 6, QcState.paused() ? 0xFFFF5555 : 0xFF55FF55);
+		String header = QcState.paused() ? "PAUSED (" + QcState.pauseReason().wire + ")" : "Qwen active";
+		graphics.text(mc.font, mc.font.plainSubstrByWidth(header, width), 6, 6, QcState.paused() ? 0xFFFF5555 : 0xFF55FF55);
 		graphics.text(mc.font, mc.font.plainSubstrByWidth("Goal: " + goal, width), 6, 16, 0xFFFFFFFF);
 		graphics.text(mc.font, mc.font.plainSubstrByWidth("Action: " + action, width), 6, 26, 0xFFFFFFFF);
-		graphics.text(mc.font, mc.font.plainSubstrByWidth("Thought: " + thought, width), 6, 36, 0xFFCCCCCC);
+		long elapsedSeconds = (System.nanoTime() - statusChangedAt) / 1_000_000_000L;
+		String statusLine = "Status: " + status + (elapsedSeconds >= 2 ? " (" + elapsedSeconds + "s)" : "");
+		graphics.text(mc.font, mc.font.plainSubstrByWidth(statusLine, width), 6, 36, 0xFFCCCCCC);
 	}
 
 	private static long remainingLeaseMs() {

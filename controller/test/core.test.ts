@@ -121,6 +121,48 @@ test('loop keeps aborted model requests single flight and discards late tool pro
   } finally {first.resolve({content: 'settled', reasoning: null, toolCalls: [], usage: {}}); await loop.close();}
 });
 
+test('HUD reports Qwen waits, tool actions and idle without hidden reasoning fields', {timeout: 5000}, async t => {
+  const config = loadConfig(DEFAULT_CONFIG_PATH); config.llm.thinking = 'off'; config.home = null;
+  const hudUpdates: Record<string, unknown>[] = [], logs: string[] = [];
+  const idle = Promise.withResolvers<void>(), cancelled = Promise.withResolvers<never>();
+  t.signal.addEventListener('abort', () => cancelled.reject(new Error('HUD regression cancelled')), {once: true});
+  const bridge: Bridge = {
+    async health() {return true;},
+    async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+      if (method === 'qc.hud.set') {hudUpdates.push(params); if (params.status === 'Idle') idle.resolve();}
+      const responses: Record<string, unknown> = {
+        'qc.control.state': {paused: false}, 'player.getState': {x: 0,y: 64,z: 0,health: 20,food: 20,dimension: 'minecraft:overworld'},
+        'player.getInventory': {hotbar: [], main: [], armor: [], offhand: {}}, 'player.getEquipment': {}, 'player.getStatusEffects': {effects: []},
+        'perception.entities': {entities: []}, 'perception.scan': {chunks: [], pois: []}, 'qc.world.state': {dimension: 'minecraft:overworld'},
+        'qc.baritone.status': {active: false}, 'session.info': {worldId: 'test', dimension: 'minecraft:overworld'},
+      };
+      return (responses[method] ?? {}) as T;
+    },
+  };
+  const events: Events = {on() {return () => {};}, async next() {return null;}};
+  const state: Notes = {home: null, zones: [], places: []};
+  const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
+  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  let requests = 0;
+  const loop = createLoop({config, bridge, events, notes, chat, heuristics, log(message) {
+    logs.push(message); if (message.startsWith('Loop failure:')) cancelled.reject(new Error(message));
+  }, record() {}, llm: {async complete() {
+    return {content: 'Model prose stays in the console.', reasoning: null, usage: {}, toolCalls: ++requests === 1 ?
+      [{id: 'hud-wait', type: 'function', function: {name: 'wait', arguments: '{"seconds":0}'}}] : []};
+  }}});
+  try {
+    loop.instruction('wait briefly'); loop.resume();
+    await Promise.race([idle.promise, cancelled.promise]);
+    assert.deepEqual(hudUpdates.filter(update => 'status' in update).map(update => update.status), ['Waiting for Qwen', 'Running wait', 'Waiting for Qwen', 'Idle']);
+    assert.deepEqual(hudUpdates.filter(update => 'action' in update).map(update => update.action), ['wait {"seconds":0}', 'wait: done, Requested wait elapsed']);
+    assert.ok(hudUpdates.every(update => !('thought' in update) && update.goal === 'wait briefly'));
+    assert.ok(hudUpdates.filter(update => update.status === 'Waiting for Qwen' || update.status === 'Idle').every(update => !('action' in update)));
+    assert.ok(hudUpdates.filter(update => update.action === 'wait: done, Requested wait elapsed').every(update => !('status' in update)));
+    assert.ok(logs.includes('Model prose stays in the console.'));
+  } finally {await loop.close();}
+});
+
 test('LLM strips hidden reasoning on replay and validates native calls', async () => {
   const originalFetch = globalThis.fetch; let body: Record<string, unknown> = {};
   globalThis.fetch = async (_url, options) => {
@@ -132,6 +174,8 @@ test('LLM strips hidden reasoning on replay and validates native calls', async (
     assert.equal(reply.content, 'Answer'); assert.equal(reply.reasoning, null);
     assert.doesNotMatch(JSON.stringify(body.messages), /hidden|think>/);
     assert.equal(body.max_tokens, 1024);
+    // vLLM rejects `tools: []` with HTTP 400; tool-less calls (history compaction) must omit tools entirely.
+    assert.equal('tools' in body, false); assert.equal('tool_choice' in body, false);
   } finally {globalThis.fetch = originalFetch;}
 });
 

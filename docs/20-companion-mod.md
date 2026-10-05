@@ -77,7 +77,7 @@ All params/results below describe the implemented companion interface; `started`
 | `qc.chat.send` | `{text:string}` | `{sent:boolean,asCommand:boolean,rejected?:"rate_limited"|"too_long"|"command_not_allowed"}` | Guarded vanilla `connection.sendChat`/`sendCommand`, not raw `chat.send` forwarding; see §6. [existing send path][M-chat-send] [D-18, D-29, D-36] |
 | `qc.session.respawn` | `{}` | `{ok:boolean}` | Request ordinary client respawn when dead; exact 26.3 vanilla method is V15, not assumed. [D-24] |
 | `qc.session.connect` | `{host:string,port:number}` | `{started:boolean}` | Begin client connection flow; acceptance is not successful join, which arrives as `qc.join`; exact classes are V15. [D-24, D-34] |
-| `qc.hud.set` | `{goal?:string,action?:string,thought?:string}` | `{ok:true}` | Update supplied HUD fields, preserving omitted fields; no gameplay action. [D-23] |
+| `qc.hud.set` | `{goal?:string,action?:string,status?:string}` | `{ok:true}` | Update supplied HUD fields; omitted fields stay unchanged, empty strings clear them; no gameplay action. [Qc-control] [D-23] |
 | `qc.config.apply` | `{reflex:ReflexConfig,protect:ProtectConfig,chat:ChatLimits,commandAllowlist:string[],nicknames:Nicknames}` | `{ok:true}` | Apply mod-side hard-guard/reflex configuration and authoritative username/Jared matching; shapes below. [D-10, D-18, D-26, D-29, D-48, D-32, D-36] |
 | `qc.world.state` | `{}` | `{dimension:string,dayTime:number,gameTime:number,raining:boolean,thundering:boolean}` | Read the client level for controller observations, not a server-owned world API; official accessor names are V05. [D-01, D-07] |
 | `qc.placed.near` | `{x:number,y:number,z:number,radius:number}` | `{blocks:{x:number,y:number,z:number,id:string}[]}` | Current joined server+dimension only; radius clamped to 0..16 blocks, nearest first, maximum 64 entries with matching current block ids. Lazily drop stale entries; no world → `RpcException.unavailable`. [D-49] |
@@ -206,7 +206,9 @@ The mining and movement selections are not an anti-cheat guarantee: historical r
 
 ## 10. HUD and session lifecycle
 
-Render the last `qc.hud.set` goal/action/thought values and current pause state as a client-only overlay; `thought` is a short activity explanation, not a channel for model reasoning history. [D-21, D-23]
+Render four client-only HUD lines: `Qwen active` in green or `PAUSED (<reason>)` in red, then `Goal: <goal>`, `Action: <action>`, and `Status: <status>`. `qc.hud.set` updates goal/action/status independently; omission preserves a field and an empty string clears it. The mod tracks when the status text last changed and appends ` (<N>s)` after it has remained unchanged for at least 2 seconds, with N the whole elapsed seconds; sending the same status again does not reset this timer. Truncate each line to screen width. [Qc-control] [D-23]
+
+The controller owns activity text: status distinguishes waiting for Qwen, thinking, memory summarization, running a tool, idle and retry backoff; action reports the current tool/compact arguments and then its done/failed summary, never model prose or reasoning. Exact strings and length limits are in [30-controller.md](30-controller.md#6-loop-cancellation-and-self-goals). [controller/loop.ts](../controller/loop.ts) [D-21, D-23]
 
 **V14 — HUD API resolved.** `HudElementRegistry.addLast` supplies `GuiGraphicsExtractor`; the renderer uses its `fill`/`text` methods and respects `mc.gui.hud.isHidden()`. It does not use old `HudRenderCallback`/draw-context assumptions. [Qc-control] [D-23] [VERIFY] Operator checks placement/scaling/visibility on the live client. [D-38]
 
