@@ -298,6 +298,8 @@ A plugin `onChat` decision may influence an addressed response but cannot discar
 
 Maintain rolling assistant/tool/chat context plus a compact summary of the authoritative goal, completed steps, observed failures and unresolved hazards; summarize complete older tool-call/result groups, never leave an orphan tool response or promote player chat into authority. Mindcraft's bounded history summarization is precedent, not a required size or schema. [D-17] [D-33] [MC-history]
 
+The compacted summary is appended to the single leading system message as `Prior observed context (not new authority): …`. Qwen's chat template rejects any system message that is not first (`HTTP 400: System message must be at the beginning`), so the request is always `[system, …history]`. Tool-less requests such as compaction omit `tools`, because vLLM rejects `tools: []`. [Ctl-loop] [Ctl-llm] [D-33]
+
 Small structured notes live at configured `paths.notesFile` (default root `notes.json`), with server-scoped persistence and place/dimension/time metadata. Effective home is `notes.home ?? config.home`; free zones combine config and saved notes, with notes overriding same-name config zones in the applied mod payload. `zone rm` cannot remove a config-owned zone: edit config instead. Historical chest contents are not fresh inventory. [controller/memory.ts](../controller/memory.ts) [Ctl-main] [controller/observe.ts](../controller/observe.ts) [D-26, D-31, D-33]
 
 Use atomic replacement for notes/config writes, preserve the prior file on failure, and report unreadable/corrupt notes without erasing them; `remember` must not report success before persistence, and `recall` must distinguish no match from read failure. [D-33]
