@@ -24,6 +24,17 @@ final class ControlRules {
 		return present && distanceSquared < 64 && elapsedNanos < 5_000_000_000L;
 	}
 
+	/** Air (ticks, max 300) at which swimming up starts; ~7.5 s of air left, enough to surface from deep water. */
+	static final int LOW_AIR = 150;
+
+	/**
+	 * Swim up only when air is genuinely low, then keep going until air is full again. Triggering on any lost
+	 * bubble made the reflex fire every second while digging through a lake and cancel all work.
+	 */
+	static boolean drowning(boolean eyeInWater, int air, int maxAir, boolean alreadyEscaping) {
+		return eyeInWater && (air < LOW_AIR || (alreadyEscaping && air < maxAir));
+	}
+
 	public static void main(String[] args) {
 		check(remainingLeaseMs(3000, 0) == 3000, "fresh lease");
 		check(remainingLeaseMs(3000, 2_999_000_000L) == 1, "lease before deadline");
@@ -47,6 +58,11 @@ final class ControlRules {
 		check(!continueFleeCreeper(true, 64, 0), "release at eight blocks");
 		check(!continueFleeCreeper(false, 1, 0), "release when creeper is gone");
 		check(!continueFleeCreeper(true, 1, 5_000_000_000L), "release after five seconds");
+		check(!drowning(true, 298, 300, false), "one lost bubble is not drowning");
+		check(drowning(true, 149, 300, false), "low air starts the swim up");
+		check(drowning(true, 299, 300, true), "keep swimming until air is full");
+		check(!drowning(true, 300, 300, true), "full air ends the escape");
+		check(!drowning(false, 10, 300, false), "head above water is not drowning");
 	}
 
 	private static void check(boolean condition, String message) {

@@ -663,6 +663,12 @@ async function dispatch(name: string, args: ObjectValue, s: Skill): Promise<Tool
         await s.transfer(id, count, take);
         const after = await s.inventory(), afterMenu = await s.menu(), change = inventoryDelta(before, after, id), containerChange = menuCount(afterMenu, id) - menuCount(menu, id);
         const ok = change === (take ? count : -count) && containerChange === -change;
+        if (ok) {
+          // Remember chests it has used so the inventory heuristic can point back to them from anywhere.
+          const p = pos(args), dimension = await s.player().then(state => typeof state.dimension === "string" ? state.dimension : null, () => null);
+          if (!env.notes.get().places.some(place => place.kind === "chest" && place.pos?.every((v, i) => v === p[i])))
+            await env.notes.update(n => { n.places.push({ name: `chest ${p.join(" ")}`, kind: "chest", note: "used by the agent for storage", pos: p, dimension, at: Date.now() }); });
+        }
         return result(ok, ok ? `Transferred exactly ${count} ${id}` : "transfer unverified", { item: id, inventoryDelta: change, containerDelta: containerChange });
       } finally { await s.close(); }
     }

@@ -698,3 +698,34 @@ for (const mode of ['instruction', 'home', 'none'] as const) test(`no-tool reply
     }
   } finally {pending.resolve(plain); await loop.close();}
 });
+
+test('turns discarded mid-inference add nothing to history; accepted turns are stored without their observation', {timeout: 10000}, async () => {
+  const config = loadConfig(DEFAULT_CONFIG_PATH);
+  const bridge: Bridge = {async health() {return true;}, async rpc<T>(): Promise<T> {return {} as T;}};
+  const events: Events = {on() {return () => {};}, async next() {return null;}};
+  const notes: Notes = {home: null, zones: [], places: []};
+  const store: NotesStore = {get() {return notes;}, async update(fn) {fn(notes);}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
+  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  const sizes: number[] = [];
+  let stored: ChatMessage | undefined;
+  const done = Promise.withResolvers<void>();
+  const loop = createLoop({config, bridge, events, notes: store, chat, heuristics, log() {}, record() {}, llm: {
+    async complete(messages) {
+      sizes.push(messages.length);
+      // Like a reflex firing during inference: the generation changes and this reply is discarded.
+      if (sizes.length <= 5) {loop.pause('Java reflex owns controls', {releaseBody: false}); loop.resume(); return {content: 'stale', reasoning: null, toolCalls: [], usage: {}};}
+      if (sizes.length === 6) return {content: null, reasoning: null, usage: {}, toolCalls: [{id: 'r1', type: 'function', function: {name: 'recall', arguments: '{"query":"iron"}'}}]};
+      stored = messages.find(message => message.role === 'user' && typeof message.content === 'string' && message.content.includes('superseded by the next observation'));
+      done.resolve(); loop.pause('console');
+      return {content: 'done', reasoning: null, toolCalls: [], usage: {}};
+    },
+  }});
+  try {
+    loop.instruction('mine iron'); loop.resume();
+    await done.promise;
+    // system + current only, however many turns were discarded before.
+    assert.deepEqual(sizes.slice(0, 6), [2, 2, 2, 2, 2, 2]);
+    assert.ok(stored, 'the accepted turn is stored with its observation replaced');
+  } finally {await loop.close();}
+});

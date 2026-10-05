@@ -45,7 +45,7 @@ final class Reflexes {
 			return;
 		}
 		if (owner != null && owner != p) finish(mc, false);
-		boolean drowning = p.isEyeInFluid(FluidTags.WATER) && p.getAirSupply() < p.getMaxAirSupply();
+		boolean drowning = ControlRules.drowning(p.isEyeInFluid(FluidTags.WATER), p.getAirSupply(), p.getMaxAirSupply(), mode == Mode.ESCAPE);
 		if (p.isInLava() || p.isOnFire() || drowning) {
 			begin(mc, Mode.ESCAPE, drowning ? "swim up" : "jump toward locally safe ground");
 			forward = false;

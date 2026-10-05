@@ -170,7 +170,7 @@ Run the reflex checks at nominal 20 Hz in the mod; use TypeScript `onTick` only 
 | Reflex | Trigger / response |
 |---|---|
 | Eat | Food ≤ `reflex.eatAtFood` (default 14), edible item present: select/use food and stop use after the observed eating postcondition. [D-32] |
-| Escape | Lava/fire/drowning: interrupt ordinary work and attempt a safe escape using local observations. [D-32] |
+| Escape | Lava/fire, or drowning: interrupt ordinary work and attempt a safe escape using local observations. "Drowning" means head underwater with air below `ControlRules.LOW_AIR` (150 of 300 ticks, ~7.5 s left); once swimming up it continues until air is full. Triggering on any lost bubble fired every ~1.5 s while digging through a lake on RayCraft and cancelled all work. [D-32] [mod/src/main/java/dev/qwencraft/control/ControlRules.java](../mod/src/main/java/dev/qwencraft/control/ControlRules.java) |
 | `flee_creeper` | A creeper within 5.0 blocks is fusing (swelling >0 / swell direction >0) or approaching since last tick: face horizontally away and hold forward+sprint, jumping when horizontally blocked. Release at ≥8.0 blocks, disappearance, or 5 seconds; emit `qc.reflex{name:"flee_creeper",action:"sprinting away"}` at start. [D-52] |
 | Fight back | A hostile that damaged the player: defend against that attacker, not proactive attacks on nearby players. [D-17, D-32] |
 
