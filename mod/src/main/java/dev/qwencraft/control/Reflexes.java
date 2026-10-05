@@ -10,21 +10,27 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.NeutralMob;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.monster.RangedAttackMob;
+import net.minecraft.world.entity.monster.piglin.AbstractPiglin;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** One owner, with escape > creeper flight > retaliation > eating. Completion releases rather than revives work. */
+/** One owner, with escape > creeper flight > combat > eating. Completion releases rather than revives work. */
 final class Reflexes {
 	private enum Mode { NONE, ESCAPE, FLEE_CREEPER, FIGHT, EAT }
 	private static Mode mode = Mode.NONE;
 	private static LocalPlayer owner;
-	private static boolean forward, jump;
+	private static boolean forward, back, jump;
 	private static BlockPos escapeTarget;
 	private static int nextEscapeScan;
 	private static Creeper fleeTarget;
@@ -32,6 +38,10 @@ final class Reflexes {
 	private static int previousSlot = -1, foodSlot = -1, swappedFrom = -1;
 	private static Item foodItem;
 	private static int initialCount, initialFood, startedTick;
+	// Player who last hit the agent and when; retaliation lasts ControlRules.RETALIATE_NANOS after their last hit.
+	private static java.util.UUID aggressorId;
+	private static long aggressorHitAt;
+	private static int nextSwordCheck;
 
 	private Reflexes() {}
 
@@ -45,6 +55,15 @@ final class Reflexes {
 			return;
 		}
 		if (owner != null && owner != p) finish(mc, false);
+		DamageSource recent = p.getLastDamageSource(5);
+		if (recent != null && recent.getEntity() instanceof Player hitter && hitter != p) {
+			aggressorId = hitter.getUUID();
+			aggressorHitAt = System.nanoTime();
+		}
+		if ((mode == Mode.NONE || mode == Mode.FIGHT) && p.tickCount >= nextSwordCheck) {
+			nextSwordCheck = p.tickCount + 20;
+			keepSwordInHotbar(mc, p);
+		}
 		boolean drowning = ControlRules.drowning(p.isEyeInFluid(FluidTags.WATER), p.getAirSupply(), p.getMaxAirSupply(), mode == Mode.ESCAPE);
 		if (p.isInLava() || p.isOnFire() || drowning) {
 			begin(mc, Mode.ESCAPE, drowning ? "swim up" : "jump toward locally safe ground");
@@ -90,18 +109,26 @@ final class Reflexes {
 			return;
 		}
 
-		DamageSource damage = p.getLastDamageSource(40);
-		LivingEntity attacker = damage != null && damage.getEntity() instanceof LivingEntity living && living instanceof Enemy ? living : null;
-		if (attacker != null && attacker.isAlive() && p.hasLineOfSight(attacker)
-				&& p.isWithinEntityInteractionRange(attacker, 0)
-				&& p.isWithinAttackRange(p.getMainHandItem(), attacker.getBoundingBox(), 0)) {
-			begin(mc, Mode.FIGHT, "retaliate against " + attacker.getType().getDescriptionId());
-			forward = jump = false;
+		// Strike first: engage the nearest threat in sight, switch to the sword, close in and hit on every ready swing.
+		LivingEntity target = combatTarget(mc, p);
+		if (target != null) {
+			begin(mc, Mode.FIGHT, "attack " + target.getType().getDescriptionId());
+			if (previousSlot < 0) previousSlot = p.getInventory().getSelectedSlot();
+			int sword = bestSwordSlot(p);
+			if (sword >= 0 && sword < 9) p.getInventory().setSelectedSlot(sword);
+			lookAt(p, target.getX(), target.getY() + target.getBbHeight() * 0.5, target.getZ());
+			boolean inReach = p.isWithinEntityInteractionRange(target, 0)
+					&& p.isWithinAttackRange(p.getMainHandItem(), target.getBoundingBox(), 0);
+			boolean ready = p.getAttackStrengthScale(0) >= 0.92F;
+			ControlRules.CombatMove move = ControlRules.combatMove(inReach, ready, target instanceof RangedAttackMob,
+					Math.sqrt(p.distanceToSqr(target)));
+			forward = move == ControlRules.CombatMove.FORWARD;
+			back = move == ControlRules.CombatMove.BACK;
+			jump = forward && p.horizontalCollision;
 			applyMovement(mc);
-			lookAt(p, attacker.getX(), attacker.getEyeY(), attacker.getZ());
-			if (p.getAttackStrengthScale(0) >= 0.95F && !p.cannotAttackWithItem(p.getMainHandItem(), 0)) {
+			if (inReach && ready && !p.cannotAttackWithItem(p.getMainHandItem(), 0)) {
 				ControlFeature.input(() -> {
-					mc.gameMode.attack(p, attacker);
+					mc.gameMode.attack(p, target);
 					p.swing(InteractionHand.MAIN_HAND, p.getMainHandItem().getAttackAnimation(), false);
 				});
 			}
@@ -154,6 +181,61 @@ final class Reflexes {
 		return nearest;
 	}
 
+	/**
+	 * Nearest threat first, re-chosen every tick: a hostile melee mob within 6 blocks in sight, a ranged mob that can
+	 * land a shot on us (ControlRules.huntRanged), or the player who hit us (within 8 blocks).
+	 */
+	private static LivingEntity combatTarget(Minecraft mc, LocalPlayer p) {
+		boolean retaliating = ControlRules.retaliating(System.nanoTime(), aggressorHitAt, aggressorId != null);
+		LivingEntity best = null;
+		double bestDistance = Double.POSITIVE_INFINITY;
+		for (var entity : mc.level.entitiesForRendering()) {
+			if (!(entity instanceof LivingEntity living) || living == p || !living.isAlive()) continue;
+			double distance = p.distanceToSqr(living);
+			if (distance >= bestDistance) continue;
+			boolean wanted;
+			if (living instanceof Player other) {
+				wanted = retaliating && other.getUUID().equals(aggressorId) && !other.isSpectator() && !other.isCreative()
+						&& distance <= ControlRules.PLAYER_ENGAGE_SQ && p.hasLineOfSight(living);
+			} else if (!ControlRules.shouldTargetMob(living instanceof Enemy, living instanceof NeutralMob || living instanceof AbstractPiglin,
+					living instanceof Creeper, living instanceof Mob mob && mob.isAggressive())) {
+				wanted = false;
+			} else if (living instanceof RangedAttackMob) {
+				wanted = ControlRules.huntRanged(distance, living.hasLineOfSight(p));
+			} else {
+				wanted = distance <= ControlRules.MOB_ENGAGE_SQ && p.hasLineOfSight(living);
+			}
+			if (wanted) {
+				best = living;
+				bestDistance = distance;
+			}
+		}
+		return best;
+	}
+
+	private static int bestSwordSlot(LocalPlayer p) {
+		int best = -1, bestRank = 0;
+		for (int slot = 0; slot < 36; slot++) {
+			ItemStack stack = p.getInventory().getItem(slot);
+			int rank = stack.isEmpty() ? 0 : ControlRules.swordRank(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString());
+			if (rank > bestRank) {
+				best = slot;
+				bestRank = rank;
+			}
+		}
+		return best;
+	}
+
+	/** Moves the best sword into the reserved hotbar slot so the combat reflex can switch to it within one tick. */
+	private static void keepSwordInHotbar(Minecraft mc, LocalPlayer p) {
+		int sword = bestSwordSlot(p);
+		if (sword < 0 || sword == ControlRules.SWORD_HOTBAR || p.containerMenu != p.inventoryMenu
+				|| !p.containerMenu.getCarried().isEmpty() || p.isUsingItem()) return;
+		int menuSlot = sword < 9 ? 36 + sword : sword; // hotbar i is inventory-menu slot 36+i; main slots map 1:1
+		ControlFeature.input(() -> mc.gameMode.handleContainerInput(p.inventoryMenu.containerId, menuSlot,
+				ControlRules.SWORD_HOTBAR, ContainerInput.SWAP, p));
+	}
+
 	private static int findFood(LocalPlayer player) {
 		for (int slot = 0; slot < 36; slot++) {
 			ItemStack stack = player.getInventory().getItem(slot);
@@ -180,12 +262,12 @@ final class Reflexes {
 		ControlFeature.cancelBaritone();
 		ControlFeature.input(() -> {
 			mc.options.keyUp.setDown(forward);
-			mc.options.keyDown.setDown(false);
+			mc.options.keyDown.setDown(back);
 			mc.options.keyLeft.setDown(false);
 			mc.options.keyRight.setDown(false);
 			mc.options.keyJump.setDown(jump);
 			mc.options.keyShift.setDown(false);
-			mc.options.keySprint.setDown(mode == Mode.FLEE_CREEPER);
+			mc.options.keySprint.setDown(mode == Mode.FLEE_CREEPER || (mode == Mode.FIGHT && forward));
 			mc.options.keyAttack.setDown(false);
 			mc.options.keyUse.setDown(mode == Mode.EAT);
 		});
@@ -204,11 +286,13 @@ final class Reflexes {
 					}
 				} else p.stopUsingItem();
 				if (previousSlot >= 0) p.getInventory().setSelectedSlot(previousSlot);
+			} else if (mode == Mode.FIGHT && previousSlot >= 0) {
+				p.getInventory().setSelectedSlot(previousSlot);
 			}
 		}
 		mode = Mode.NONE;
 		owner = null;
-		forward = jump = false;
+		forward = back = jump = false;
 		escapeTarget = null;
 		fleeTarget = null;
 		fleeStartedAt = 0;

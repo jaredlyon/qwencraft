@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TOOLS, toolsForLlm, validateArguments } from "../tools.ts";
-import { MAX_PATH_FAILURES, blocksForItem, chooseRecipe, dropForBlock, executeSkill, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId, oreHeight } from "../skills.ts";
+import { MAX_PATH_FAILURES, SWORD_HOTBAR, blocksForItem, chooseRecipe, dropForBlock, executeSkill, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId, oreHeight } from "../skills.ts";
 import type { Config, GameEvent, Notes, SkillEnv } from "../types.ts";
 
 const expected = "observe look_screenshot go_to go_to_player follow_player explore collect mine craft smelt place_block break_block equip eat attack chest_deposit chest_withdraw drop chat_say chat_reply run_command remember recall set_goal finish_goal stop harness_info".split(" ");
@@ -225,7 +225,7 @@ test("a job that Baritone keeps retrying ends after repeated path failures inste
   assert.equal(stopped, true);
 });
 
-function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; moving?: boolean; acquireAt?: number; count?: number; startY?: number} = {}) {
+function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; moving?: boolean; acquireAt?: number; count?: number; startY?: number; pickaxeSlot?: number; selected?: number} = {}) {
   let now = 0, stopped = false, started = false, scanned = false, descended = false;
   const calls: Array<{method: string; params: unknown}> = [];
   const branchY = oreHeight(itemId(options.block ?? "iron_ore")) ?? 64;
@@ -240,7 +240,7 @@ function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; movi
       const responses: Record<string, unknown> = {
         "player.getState": {x: options.moving ? now / 30000 : 0, y: descended ? branchY : options.startY ?? branchY, z: 0, dimension: "minecraft:overworld"},
         "qc.baritone.goto": {started: true, taskId: "down-task"},
-        "player.getInventory": {selectedSlot: 0, hotbar: [{id: `minecraft:${pickaxe}_pickaxe`, count: 1, slot: 0},
+        "player.getInventory": {selectedSlot: options.selected ?? 0, hotbar: [{id: `minecraft:${pickaxe}_pickaxe`, count: 1, slot: options.pickaxeSlot ?? 0},
           ...(now >= (options.acquireAt ?? Infinity) ? [{id: dropForBlock(options.block ?? "iron_ore"), count: options.count ?? 1, slot: 1}] : [])], main: [], armor: [], offhand: {}},
         "qc.baritone.mine": {started: true, taskId: "ore-task"}, "qc.baritone.status": {active: (started || descended) && !stopped, taskId: started ? "ore-task" : "down-task"},
         "qc.baritone.stop": {stopped: true},
@@ -305,4 +305,13 @@ test("ore budgets use the five-minute floor, forty seconds per item and fifteen-
     assert.equal(failure.ok, false); assert.equal(expired.now(), budget);
     assert.equal(expired.state().stopped, true);
   }
+});
+
+test("pulling a tool from the main inventory never displaces the sword in hotbar slot 8", async () => {
+  const job = oreJob("stone", {acquireAt: 45000, pickaxeSlot: 20, selected: SWORD_HOTBAR});
+  const answer = await executeSkill("mine", {block: "iron_ore", count: 1}, job.env, job.now);
+  assert.equal(answer.ok, true, answer.summary);
+  const swap = job.calls.find(c => c.method === "inventory.swapSlots");
+  assert.deepEqual(swap?.params, {slotA: 20, slotB: 0});
+  assert.ok(!job.calls.some(c => c.method === "inventory.swapSlots" && (c.params as {slotB?: number}).slotB === SWORD_HOTBAR));
 });

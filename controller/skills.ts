@@ -87,6 +87,8 @@ export function chooseRecipe(value: unknown, item: string, type: string): Object
   const recipes = list(object(value).recipes).filter(r => r.known === true && r.type === type && object(r.result).id === item && number(object(r.result).count) > 0);
   return recipes.sort((a, b) => listIngredients(a).length - listIngredients(b).length || string(a.ref).localeCompare(string(b.ref)))[0] ?? null;
 }
+/** Hotbar index the mod reserves for the best sword (ControlRules.SWORD_HOTBAR). */
+export const SWORD_HOTBAR = 8;
 function listIngredients(recipe: ObjectValue): string[][] {
   if (!Array.isArray(recipe.ingredients)) throw new Error("recipe ingredients unavailable");
   return recipe.ingredients.map(v => {
@@ -209,11 +211,16 @@ class Skill {
     const stack = inventoryStacks(inventory).find(s => s.id === id);
     if (!stack) throw new Error("item missing");
     const slot = number(stack.slot);
-    const selected = number(inventory.selectedSlot);
-    if (slot > 8) await this.rpc("inventory.swapSlots", { slotA: slot, slotB: selected });
-    else await this.rpc("inventory.selectHotbar", { slot });
+    await this.bringToHotbar(slot, number(inventory.selectedSlot));
     await this.sleep(150);
     if (object((await this.rpc("player.getEquipment")).mainHand).id !== id) throw new Error("equip unverified");
+  }
+  /** Hotbar slot 8 is reserved for the sword the mod's combat reflex keeps there; never swap other items into it. */
+  async bringToHotbar(slot: number, selected: number): Promise<void> {
+    if (slot <= 8) { await this.rpc("inventory.selectHotbar", { slot }); return; }
+    const target = selected === SWORD_HOTBAR ? 0 : selected;
+    await this.rpc("inventory.swapSlots", { slotA: slot, slotB: target });
+    await this.rpc("inventory.selectHotbar", { slot: target });
   }
   async open(p: Vec3, expected: string[]): Promise<ObjectValue> {
     await this.go(p);
@@ -348,9 +355,7 @@ async function acquisition(s: Skill, blocks: string[], id: string, count: number
       return match && number(stack.count) > 0 ? [{slot: number(stack.slot), tier: tiers[match[1]!]!}] : [];
     }).sort((a, b) => b.tier - a.tier)[0];
     if (!best || best.tier < required) throw new Error(`need a ${["wooden", "stone", "iron", "diamond"][required]} pickaxe or better to mine ${blocks[0]}`);
-    const selected = number(inventory.selectedSlot);
-    if (best.slot > 8) await s.rpc("inventory.swapSlots", {slotA: best.slot, slotB: selected});
-    else await s.rpc("inventory.selectHotbar", {slot: best.slot});
+    await s.bringToHotbar(best.slot, number(inventory.selectedSlot));
   } else {
     const scan = await s.rpc("perception.scan", { radius: 3, find: blocks, findLimit: 64 });
     const candidates = list(scan.found).filter(b => !isProtected(s.env.config, s.env.notes.get(), string(b.id), pos(b)));

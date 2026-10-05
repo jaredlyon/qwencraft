@@ -14,7 +14,7 @@ Current fix-wave policy: 27 curated tools, immediate `continue` for actionable i
 
 | File | Contents |
 |---|---|
-| [00-decisions.md](00-decisions.md) | Decision log D-00…D-59: choices, alternatives, evidence and accepted tensions; D-27 superseded by D-50, amended by D-59; D-54…D-57 amend chat scheduling/classification; D-58 adds the inventory-chests heuristic |
+| [00-decisions.md](00-decisions.md) | Decision log D-00…D-60: choices, alternatives, evidence and accepted tensions; D-27 superseded by D-50, amended by D-59; D-54…D-57 amend chat scheduling/classification; D-58 adds the inventory-chests heuristic |
 | [10-architecture.md](10-architecture.md) | Ground truth, process topology, layering, agent loop, latency budget, failure domains |
 | [20-companion-mod.md](20-companion-mod.md) | The `qwencraft` Fabric mod: Baritone RPCs, chat hook, stop controls, reflexes, protect guard, HUD |
 | [30-controller.md](30-controller.md) | The TypeScript controller: bridge client, LLM client, curated tools, observations, heuristics API, memory, console |

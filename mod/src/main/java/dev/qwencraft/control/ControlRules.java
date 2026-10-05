@@ -35,6 +35,56 @@ final class ControlRules {
 		return eyeInWater && (air < LOW_AIR || (alreadyEscaping && air < maxAir));
 	}
 
+	/** Engage hostile mobs within 6 blocks and a player who hit us within 8 blocks, for 15 s after their last hit. */
+	static final double MOB_ENGAGE_SQ = 36, PLAYER_ENGAGE_SQ = 64;
+	/**
+	 * Ranged attackers (skeletons, pillagers, witches, trident drowned) are hunted iff they can land a shot: within 15
+	 * blocks (the skeleton bow range, RangedBowAttackGoal radius 15) and with line of sight to the agent.
+	 */
+	static final double RANGED_ENGAGE_SQ = 225;
+
+	static boolean huntRanged(double distanceSquared, boolean mobSeesAgent) {
+		return mobSeesAgent && distanceSquared <= RANGED_ENGAGE_SQ;
+	}
+	/** Melee mobs hit from ~1.4 blocks, we hit from 3: back off inside this distance while the swing recharges. */
+	static final double BACKOFF_DISTANCE = 2.6;
+
+	enum CombatMove { FORWARD, BACK, HOLD }
+
+	static CombatMove combatMove(boolean inReach, boolean swingReady, boolean rangedTarget, double distance) {
+		if (!inReach) return CombatMove.FORWARD;
+		if (!swingReady && !rangedTarget && distance < BACKOFF_DISTANCE) return CombatMove.BACK;
+		return CombatMove.HOLD;
+	}
+	static final long RETALIATE_NANOS = 15_000_000_000L;
+	/** Hotbar index reserved for the best sword (the rightmost slot). */
+	static final int SWORD_HOTBAR = 8;
+
+	/**
+	 * Strike-first targets: hostile mobs, except creepers (the flee reflex owns them) and mobs that are neutral until
+	 * provoked (endermen, zombified piglins, piglins), which are hit only once they are aggressive: hitting a calm
+	 * zombified piglin turns the whole group on the agent.
+	 */
+	static boolean shouldTargetMob(boolean enemy, boolean neutralUntilProvoked, boolean creeper, boolean aggressive) {
+		if (creeper) return false;
+		return neutralUntilProvoked ? aggressive : enemy;
+	}
+
+	static boolean retaliating(long nowNanos, long lastHitNanos, boolean hasAggressor) {
+		return hasAggressor && nowNanos - lastHitNanos < RETALIATE_NANOS;
+	}
+
+	static int swordRank(String itemId) {
+		return switch (itemId) {
+			case "minecraft:netherite_sword" -> 5;
+			case "minecraft:diamond_sword" -> 4;
+			case "minecraft:iron_sword" -> 3;
+			case "minecraft:stone_sword", "minecraft:copper_sword" -> 2;
+			case "minecraft:golden_sword", "minecraft:wooden_sword" -> 1;
+			default -> 0;
+		};
+	}
+
 	public static void main(String[] args) {
 		check(remainingLeaseMs(3000, 0) == 3000, "fresh lease");
 		check(remainingLeaseMs(3000, 2_999_000_000L) == 1, "lease before deadline");
@@ -63,6 +113,25 @@ final class ControlRules {
 		check(drowning(true, 299, 300, true), "keep swimming until air is full");
 		check(!drowning(true, 300, 300, true), "full air ends the escape");
 		check(!drowning(false, 10, 300, false), "head above water is not drowning");
+		check(shouldTargetMob(true, false, false, false), "hostile mob is hit before it attacks");
+		check(!shouldTargetMob(true, false, true, true), "creepers are left to the flee reflex");
+		check(!shouldTargetMob(true, true, false, false), "calm zombified piglin/enderman is not provoked");
+		check(shouldTargetMob(true, true, false, true), "aggressive neutral mob is hit");
+		check(!shouldTargetMob(false, false, false, true), "passive animals are never targeted");
+		check(retaliating(14_999_999_999L, 0, true), "retaliate within fifteen seconds of the last hit");
+		check(!retaliating(15_000_000_000L, 0, true), "stop retaliating fifteen seconds after the last hit");
+		check(!retaliating(1, 0, false), "no aggressor, no retaliation");
+		check(swordRank("minecraft:diamond_sword") > swordRank("minecraft:iron_sword"), "diamond beats iron");
+		check(swordRank("minecraft:netherite_sword") > swordRank("minecraft:diamond_sword"), "netherite beats diamond");
+		check(combatMove(false, true, false, 5) == CombatMove.FORWARD, "close the distance when out of reach");
+		check(combatMove(true, false, false, 1.8) == CombatMove.BACK, "back off a close melee mob while recharging");
+		check(combatMove(true, true, false, 1.8) == CombatMove.HOLD, "stand and strike when the swing is ready");
+		check(combatMove(true, false, false, 2.9) == CombatMove.HOLD, "hold at the edge of reach");
+		check(combatMove(true, false, true, 1.8) == CombatMove.HOLD, "stay on a ranged mob instead of backing into its fire");
+		check(huntRanged(14.9 * 14.9, true), "hunt a skeleton that can shoot us");
+		check(!huntRanged(14.9 * 14.9, false), "ignore a skeleton without line of sight");
+		check(!huntRanged(15.1 * 15.1, true), "ignore a skeleton beyond bow range");
+		check(swordRank("minecraft:diamond_pickaxe") == 0, "pickaxes are not swords");
 	}
 
 	private static void check(boolean condition, String message) {

@@ -80,6 +80,7 @@ Use [bench/README.md](../bench/README.md) for the exact multi-terminal bring-up:
 
 The orchestrator's local bench E2E observed the following on 2026-10-04; these are scoped bench results, not additional tests run by this documentation update or proof of live RayCraft acceptance. Procedures/tools: [bench/README.md](../bench/README.md), [bench/rcon.ts](../bench/rcon.ts), [bench/rpc.ts](../bench/rpc.ts). [D-38]
 
+- Combat (D-60, night, 2 zombies + husk + skeleton): the sword stayed in hotbar slot 9 and was selected on every engagement, and targets were taken nearest first. All four died in 8.4 s with 2 hits taken (one opening zombie hit, one point-blank arrow). The reactive predecessor took 7 hits and never engaged the skeleton. Player retaliation is untested (single-player bench). [D-60] [mod/src/main/java/dev/qwencraft/control/Reflexes.java](../mod/src/main/java/dev/qwencraft/control/Reflexes.java)
 - Chat Q&A answered addressed questions with AI disclosure; private questions received `/msg` replies. [D-16, D-36] [controller/chat-policy.ts](../controller/chat-policy.ts)
 - Vanilla's unavailable `/home` took the bounded fallback, asking for console `home set` rather than inventing an anchor. [D-40] [controller/run.ts](../controller/run.ts)
 - Baritone mined **4 oak logs**, and crafting produced planks, a crafting table, sticks and a wooden pickaxe with inventory postconditions. [D-08, D-09] [controller/skills.ts](../controller/skills.ts)
