@@ -7,6 +7,7 @@ import { REFLEX_OWNS_BODY } from "./types.ts";
 import { withinHome, horizontalDistance, observe, tickSnapshot } from "./observe.ts";
 
 type ObjectValue = Record<string, unknown>;
+export type SkillSleep = (ms: number, signal: AbortSignal) => Promise<void>;
 export function object(value: unknown): ObjectValue {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid bridge response");
   return value as ObjectValue;
@@ -118,8 +119,10 @@ class Skill {
   cursorOrigin: number | null = null;
   cursorUnknown = false;
   observed: ObjectValue = {};
+  stationCounts = new Map<string, number>();
   now: () => number;
-  constructor(env: SkillEnv, budget = 120000, now = Date.now) { this.env = env; this.now = now; this.deadline = now() + budget; }
+  sleepFor: SkillSleep | undefined;
+  constructor(env: SkillEnv, budget = 120000, now = Date.now, sleepFor?: SkillSleep) { this.env = env; this.now = now; this.deadline = now() + budget; this.sleepFor = sleepFor; }
   check(): void {
     if (this.env.signal.aborted) throw new Error("interrupted");
     if (this.now() > this.deadline) throw new Error("skill timed out");
@@ -130,7 +133,13 @@ class Skill {
     this.check();
     return value;
   }
-  async sleep(ms = 250): Promise<void> { this.check(); await delay(Math.min(ms, Math.max(1, this.deadline - this.now())), undefined, { signal: this.env.signal }); this.check(); }
+  async sleep(ms = 250): Promise<void> {
+    this.check();
+    const duration = Math.min(ms, Math.max(1, this.deadline - this.now()));
+    if (this.sleepFor) await this.sleepFor(duration, this.env.signal);
+    else await delay(duration, undefined, { signal: this.env.signal });
+    this.check();
+  }
   async inventory(): Promise<ObjectValue> { return this.rpc("player.getInventory"); }
   async player(): Promise<ObjectValue> { return this.rpc("player.getState"); }
   homeTarget(p: Vec3): void { if (!withinHome(this.env.config, this.env.notes.get() as Notes, p)) throw new Error("home radius exceeded"); }
@@ -203,8 +212,9 @@ class Skill {
   }
   async go(p: Vec3, range = 3): Promise<void> {
     this.homeTarget(p);
-    if (distance(pos(await this.player()), p) <= range) return;
-    if (!await this.job("qc.baritone.goto", { ...coordinates(p), range }, async () => distance(pos(await this.player()), p) <= range, 60000)) throw new Error("out of reach");
+    const goal = { ...coordinates(p), range };
+    if (goalSatisfied(pos(await this.player()), goal)) return;
+    if (!await this.job("qc.baritone.goto", goal, async () => goalSatisfied(pos(await this.player()), goal), 60000)) throw new Error("out of reach");
   }
   async hold(id: string): Promise<void> {
     const inventory = await this.inventory();
@@ -225,6 +235,9 @@ class Skill {
   async open(p: Vec3, expected: string[]): Promise<ObjectValue> {
     await this.go(p);
     await this.rpc("control.setInput", { sneak: false });
+    // Releasing sneak takes effect on a later client tick (e.g. right after place_block sneaked); opening while
+    // still crouched is refused, so wait until the player is observed standing.
+    for (let i = 0; i < 8 && (await this.player()).sneaking === true; i++) await this.sleep(100);
     await this.rpc("container.open", coordinates(p));
     const end = Math.min(this.deadline, Date.now() + 5000);
     while (Date.now() < end) {
@@ -315,23 +328,25 @@ class Skill {
       left -= n;
     }
   }
-  async station(id: string): Promise<Vec3> {
+  async station(id: string): Promise<{ pos: Vec3; placedHere: boolean }> {
     const scan = await this.rpc("perception.scan", { radius: 2, find: [id], findLimit: 32 });
     const session = await this.rpc("session.info");
     const candidates = list(scan.found);
     const notes = this.env.notes.get();
     const known = candidates.find(candidate => notes.places.some(place => place.pos && place.dimension === session.dimension && place.note.includes(string(session.worldId)) && distance(place.pos, pos(candidate)) < 0.1 && (place.kind === "owned" || place.kind === "station" || place.kind === "authorized")));
-    if (known) return pos(known);
+    if (known) return { pos: pos(known), placedHere: false };
     const inv = await this.inventory();
     if (itemCount(inv, id) === 0) await craft(this, id, 1, []);
-    if (itemCount(await this.inventory(), id) === 0) throw new Error("station inaccessible: no authorized or owned station");
+    const count = itemCount(await this.inventory(), id);
+    if (count === 0) throw new Error("station inaccessible: no authorized or owned station");
     const p = pos(await this.player()).map(Math.floor) as Vec3;
     for (const offset of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const at: Vec3 = [p[0] + offset[0]!, p[1], p[2] + offset[1]!];
       if ((await this.block(at)).air !== true || (await this.block([at[0], at[1] - 1, at[2]])).air === true) continue;
       await place(this, id, at, "up");
       await this.env.notes.update(n => n.places.push({ kind: "owned", name: id, note: `Placed by controller on ${String(session.worldId)}`, pos: at, dimension: string(session.dimension), at: Date.now() }));
-      return at;
+      this.stationCounts.set(at.join(" "), count);
+      return { pos: at, placedHere: true };
     }
     throw new Error("station inaccessible: no safe placement");
   }
@@ -371,7 +386,7 @@ async function acquisition(s: Skill, blocks: string[], id: string, count: number
   if (branchY !== undefined) {
     const here = pos(await s.player());
     if (here[1] > branchY + 4) {
-      const down = await s.job("qc.baritone.goto", { x: Math.floor(here[0]), y: branchY, z: Math.floor(here[2]) },
+      const down = await s.job("qc.baritone.goto", { y: branchY },
         async () => Math.abs(pos(await s.player())[1] - branchY) <= 2, Math.max(120000, s.deadline - s.now()));
       if (!down) return result(false, `could not dig down to y=${branchY}`, s.observed);
     }
@@ -413,6 +428,134 @@ async function place(s: Skill, id: string, p: Vec3, face: string): Promise<ToolR
   }
   throw new Error("placement unverified");
 }
+
+async function withStation(s: Skill, id: string | null, use: (p: Vec3 | null) => Promise<ToolResult>): Promise<ToolResult> {
+  const station = id === null ? null : await s.station(id);
+  let answer: ToolResult | undefined, failure: unknown;
+  try { answer = await use(station?.pos ?? null); }
+  catch (error) { failure = error; }
+  finally {
+    let suffix = "";
+    if (station?.placedHere && id !== null) {
+      const p = station.pos;
+      let broken = false, collected = false;
+      try {
+        s.check();
+        if (id === "minecraft:furnace") {
+          await s.open(p, ["minecraft:furnace"]);
+          for (const slot of list((await s.menu()).slots))
+            await s.transfer(string(slot.id), number(slot.count), true, number(slot.slot));
+          if (list((await s.menu()).slots).length) throw new Error("furnace still occupied");
+        }
+        await s.close();
+        if (s.cursorUnknown) throw new Error("cursor recovery required");
+        const stacks = inventoryStacks(await s.inventory());
+        if (stacks.length >= 36 && !stacks.some(stack => stack.id === id && number(stack.count) < 64)) throw new Error("inventory full");
+        if ((await s.block(p)).id !== id) throw new Error("station changed");
+        const tracked = await s.rpc("qc.placed.near", { ...coordinates(p), radius: 0 });
+        if (!list(tracked.blocks).some(block => block.x === p[0] && block.y === p[1] && block.z === p[2] && block.id === id)) throw new Error("station no longer owned");
+        await dispatch("break_block", coordinates(p), s);
+        broken = true;
+        // Walk onto the drop rather than stopping within the usual interaction range.
+        await s.go(p, 0.75);
+        const end = Math.min(s.deadline, s.now() + 5000);
+        while (s.now() < end) {
+          if (itemCount(await s.inventory(), id) >= (s.stationCounts.get(p.join(" ")) ?? 1)) { collected = true; break; }
+          await s.sleep();
+        }
+      } catch { /* Keep the production outcome; report portable-kit recovery separately. */ }
+      finally {
+        if (broken) await s.env.notes.update(n => {
+          n.places = n.places.filter(place => !(place.kind === "owned" && place.name === id && place.pos?.every((v, i) => v === p[i])));
+        });
+        if (!collected) suffix = broken ? `; station dropped at ${p.join(" ")}, not collected` : `; station left placed at ${p.join(" ")}`;
+        s.observed.stationPickupSummary = suffix;
+      }
+    }
+    try { await s.close(); } catch (error) { failure ??= error; }
+    if (answer) answer.summary += suffix;
+    if (failure !== undefined) throw new Error(`${failure instanceof Error ? failure.message : "skill failed"}${suffix}`);
+  }
+  return answer!;
+}
+
+async function repairTool(s: Skill, id: string, p: Vec3): Promise<ToolResult> {
+  const block = await s.block(p);
+  if (!["minecraft:anvil", "minecraft:chipped_anvil", "minecraft:damaged_anvil"].includes(string(block.id))) throw new Error("no anvil at that position");
+  const session = await s.rpc("session.info"), notes = s.env.notes.get();
+  const placed = await s.rpc("qc.placed.near", { ...coordinates(p), radius: 0 }).catch(() => ({ blocks: [] }));
+  const own = list(placed.blocks).some(b => b.x === p[0] && b.y === p[1] && b.z === p[2] && b.id === block.id);
+  const remembered = notes.places.some(place => ["anvil", "owned", "station", "authorized"].includes(place.kind) && place.dimension === session.dimension && place.note.includes(string(session.worldId)) && place.pos?.every((v, i) => v === p[i]));
+  if (!own && !remembered) throw new Error("anvil is not owned or authorized");
+  const beforeTools = list((await s.rpc("qc.inventory.tools")).tools);
+  const tool = beforeTools.filter(t => t.id === id && number(t.damage) > 0).sort((a, b) => number(b.damage) - number(a.damage))[0];
+  if (!tool) throw new Error("item is not damaged");
+  const repairWith = Array.isArray(tool.repairWith) ? tool.repairWith.map(string) : [];
+  const inventory = await s.inventory();
+  const material = repairWith.find(item => itemCount(inventory, item) > 0);
+  if (!material) throw new Error(`no repair material (${repairWith.join(", ")})`);
+  const damage = number(tool.damage), maxDamage = number(tool.maxDamage);
+  const units = Math.min(4, Math.ceil(damage / Math.floor(maxDamage / 4)), itemCount(inventory, material));
+  if (!inventoryStacks(inventory).some(stack => stack.id === material)) {
+    const occupied = inventoryStacks(inventory);
+    const empty = Array.from({ length: 27 }, (_, i) => i + 9).find(slot => !occupied.some(stack => stack.slot === slot));
+    if (empty === undefined) throw new Error("no free slot for repair material");
+    if ((await s.rpc("container.state")).open === true) throw new Error("another container is open");
+    await s.rpc("inventory.swapSlots", { slotA: 40, slotB: empty });
+  }
+  let source = tool.slot, movedArmor = false;
+  if (typeof source !== "number") {
+    const armorSlots: Record<string, number> = { head: 36, chest: 37, legs: 38, feet: 39, offhand: 40 };
+    const occupied = inventoryStacks(await s.inventory());
+    const empty = Array.from({ length: 27 }, (_, i) => i + 9).find(slot => !occupied.some(stack => stack.slot === slot));
+    if (empty === undefined) throw new Error("no free slot to repair from armor");
+    const armorSlot = armorSlots[string(source)];
+    if (armorSlot === undefined) throw new Error("unknown armor slot");
+    if ((await s.rpc("container.state")).open === true) throw new Error("another container is open");
+    await s.rpc("inventory.swapSlots", { slotA: armorSlot, slotB: empty });
+    source = empty; movedArmor = true;
+    if (!inventoryStacks(await s.inventory()).some(stack => stack.slot === source && stack.id === id && stack.damage === damage)) throw new Error("armor move unverified");
+  }
+  const xp = number((await s.player()).xpLevel);
+  try {
+    const menu = await s.open(p, ["minecraft:anvil"]);
+    if (list(menu.slots).length) throw new Error("anvil inputs occupied");
+    const size = number(menu.size);
+    await s.moveCount(s.playerMenuSlot(number(source), size), 0, 1, true);
+    let remaining = units;
+    while (remaining > 0) {
+      const stack = inventoryStacks(await s.inventory()).find(stack => stack.id === material);
+      if (!stack) throw new Error("repair material changed");
+      const n = Math.min(remaining, number(stack.count));
+      await s.moveCount(s.playerMenuSlot(number(stack.slot), size), 1, n);
+      remaining -= n;
+    }
+    const end = Math.min(s.deadline, s.now() + 3000);
+    let state = await s.rpc("qc.anvil.state");
+    while (state.open === true && !state.result && number(state.cost) < 40 && s.now() < end) { await s.sleep(); state = await s.rpc("qc.anvil.state"); }
+    const cost = number(state.cost);
+    if (state.open === true && cost >= 40) throw new Error("too expensive");
+    if (state.open !== true || !state.result) throw new Error("anvil shows no result");
+    if (cost > xp) throw new Error(`need ${cost} XP levels, have ${xp}`);
+    await s.click(2, 0, "quick_move");
+    await s.close();
+    const endAck = Math.min(s.deadline, s.now() + 3000);
+    while (s.now() < endAck) {
+      const tools = list((await s.rpc("qc.inventory.tools")).tools);
+      const after = tools.find(t => t.id === id && number(t.damage) < damage &&
+        tools.filter(other => other.id === id && other.damage === t.damage).length > beforeTools.filter(other => other.id === id && other.damage === t.damage).length);
+      const xpAfter = number((await s.player()).xpLevel);
+      if (after && xpAfter < xp) {
+        const leftBefore = maxDamage - damage, leftAfter = number(after.maxDamage) - number(after.damage);
+        if (!s.env.notes.get().places.some(place => place.kind === "anvil" && place.dimension === session.dimension && place.pos?.every((v, i) => v === p[i])))
+          await s.env.notes.update(n => { n.places.push({ kind: "anvil", name: `anvil ${p.join(" ")}`, note: `used by the agent on ${string(session.worldId)}`, pos: p, dimension: string(session.dimension), at: Date.now() }); });
+        return result(true, `Repaired ${id}: ${leftBefore} -> ${leftAfter} durability for ${cost} levels${movedArmor ? "; repaired armor is in inventory; call equip to wear it again" : ""}`, { before: tool, after, cost, material, units });
+      }
+      await s.sleep();
+    }
+    throw new Error("repair unverified");
+  } finally { await s.close(); }
+}
 async function craft(s: Skill, id: string, count: number, chain: string[]): Promise<ToolResult> {
   if (chain.includes(id) || chain.length > 12) throw new Error("recipe cycle or depth exceeded");
   const recipe = chooseRecipe(await s.rpc("recipes.query", { items: [id], includeUnknown: false }), id, "crafting");
@@ -429,12 +572,12 @@ async function craft(s: Skill, id: string, count: number, chain: string[]): Prom
     if (missing > 0) await craft(s, ingredient, missing, [...chain, id]);
   }
   const needsTable = number(recipe.width ?? 0) > 2 || number(recipe.height ?? 0) > 2 || listIngredients(recipe).length > 4;
-  if (needsTable) await s.open(await s.station("minecraft:crafting_table"), ["minecraft:crafting"]);
-  else {
-    const menu = await s.rpc("container.state");
-    if (menu.open === true) throw new Error("craft output unverified: another container is open");
-  }
-  try {
+  return withStation(s, needsTable ? "minecraft:crafting_table" : null, async p => {
+    if (p) await s.open(p, ["minecraft:crafting"]);
+    else {
+      const menu = await s.rpc("container.state");
+      if (menu.open === true) throw new Error("craft output unverified: another container is open");
+    }
     for (let i = 0; i < batches; i++) {
       const start = itemCount(await s.inventory(), id);
       await s.rpc("craft.place", { ref: string(recipe.ref), all: false });
@@ -457,7 +600,7 @@ async function craft(s: Skill, id: string, count: number, chain: string[]): Prom
     }
     const delta = inventoryDelta(before, await s.inventory(), id);
     return result(delta >= count, delta >= count ? `Crafted ${delta} ${id}; batch surplus ${delta - count}` : "craft output unverified", { item: id, acquired: delta, requested: count, surplus: delta - count, recipe: recipe.ref });
-  } finally { await s.close(); }
+  });
 }
 
 async function smelt(s: Skill, id: string, count: number, fuelArg?: string): Promise<ToolResult> {
@@ -472,8 +615,8 @@ async function smelt(s: Skill, id: string, count: number, fuelArg?: string): Pro
   const fuel = fuelArg ? itemId(fuelArg) : ["minecraft:coal", "minecraft:charcoal"].find(item => itemCount(before, item) >= fuelCount);
   if (!fuel || !["minecraft:coal", "minecraft:charcoal"].includes(fuel)) throw new Error("fuel missing: supported fuel is coal or charcoal");
   if (itemCount(before, fuel) < fuelCount) throw new Error("fuel missing");
-  const menu = await s.open(await s.station("minecraft:furnace"), ["minecraft:furnace"]);
-  try {
+  return withStation(s, "minecraft:furnace", async p => {
+    const menu = await s.open(p!, ["minecraft:furnace"]);
     if (list(menu.slots).length) throw new Error("furnace inaccessible: occupied slots would confound new output");
     let remaining = units, taken = 0, insertedInput = 0, insertedFuel = 0;
     while (remaining > 0) {
@@ -507,7 +650,7 @@ async function smelt(s: Skill, id: string, count: number, fuelArg?: string): Pro
     }
     const delta = inventoryDelta(before, await s.inventory(), id);
     return result(delta >= count, delta >= count ? `Smelted ${delta} ${id}` : "smelting output unverified", { ...s.observed, item: id, acquired: delta, requested: count, surplus: delta - count });
-  } finally { await s.close(); }
+  });
 }
 
 async function namedPlayer(s: Skill, name: string): Promise<ObjectValue> {
@@ -585,6 +728,7 @@ async function dispatch(name: string, args: ObjectValue, s: Skill): Promise<Tool
     }
     case "craft": return craft(s, itemId(string(args.item)), number(args.count), []);
     case "smelt": return smelt(s, itemId(string(args.item)), number(args.count), args.fuel === undefined ? undefined : string(args.fuel));
+    case "repair_tool": return repairTool(s, itemId(string(args.item)), pos(args));
     case "place_block": return place(s, itemId(string(args.item)), pos(args), args.face === undefined ? "up" : string(args.face));
     case "break_block": {
       const p = pos(args), before = await s.block(p, true), id = string(before.id);
@@ -768,8 +912,8 @@ async function dispatch(name: string, args: ObjectValue, s: Skill): Promise<Tool
 }
 function itemIdSafe(value: string): string | null { try { return itemId(value); } catch { return null; } }
 
-export async function executeSkill(name: string, args: ObjectValue, env: SkillEnv, now = Date.now): Promise<ToolResult> {
-  const s = new Skill(env, name === "smelt" ? Math.max(120000, number(args.count) * 12000 + 30000) : 120000, now);
+export async function executeSkill(name: string, args: ObjectValue, env: SkillEnv, now = Date.now, sleepFor?: SkillSleep): Promise<ToolResult> {
+  const s = new Skill(env, name === "smelt" ? Math.max(120000, number(args.count) * 12000 + 30000) : 120000, now, sleepFor);
   const body = !["observe", "look_screenshot", "chat_say", "chat_reply", "remember", "recall", "set_goal", "finish_goal", "harness_info"].includes(name);
   try {
     s.check();
@@ -793,6 +937,6 @@ export async function executeSkill(name: string, args: ObjectValue, env: SkillEn
       }));
       s.observed.settledAfterFailure = Object.fromEntries(settled);
     }
-    return result(false, interrupted ? "interrupted" : error instanceof Error ? error.message : "skill failed", { ...s.observed, failedStops });
+    return result(false, interrupted ? `interrupted${typeof s.observed.stationPickupSummary === "string" ? s.observed.stationPickupSummary : ""}` : error instanceof Error ? error.message : "skill failed", { ...s.observed, failedStops });
   }
 }

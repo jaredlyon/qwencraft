@@ -7,7 +7,7 @@ A phase-1 Minecraft 26.3 harness: Qwen3.8-Flash-Next on a DGX Spark plans throug
 ## Layout
 
 - `mod/` — Java 25 Fabric companion: control/reflexes, guards, Baritone RPCs and HUD. [mod/src/main/java/dev/qwencraft/QwencraftClient.java](mod/src/main/java/dev/qwencraft/QwencraftClient.java)
-- `controller/` — Node 24 erasable TypeScript planner, 27-tool registry split into single-flight body and parallel chat lanes, memory and console; `main.ts` supervises `run.ts`. [controller/main.ts](controller/main.ts) · [controller/run.ts](controller/run.ts) · [controller/tools.ts](controller/tools.ts)
+- `controller/` — Node 24 erasable TypeScript planner, 28-tool registry (including `repair_tool`) split into single-flight body and parallel chat lanes, memory and console; `main.ts` supervises `run.ts`. [controller/main.ts](controller/main.ts) · [controller/run.ts](controller/run.ts) · [controller/tools.ts](controller/tools.ts)
 - `heuristics/` — trusted operator-written, hot-reloaded hooks. [Authoring guide](heuristics/README.md)
 - `bench/` — disposable loopback Paper server, RCON/RPC helpers and bench config. [Bench guide](bench/README.md)
 - `docs/` — cited design/decision register and pending live installation/acceptance. [Index](docs/README.md)
@@ -42,6 +42,8 @@ Thinking is reserved for planning a new console instruction and a replan after a
 Write a default-export heuristic in `heuristics/*.ts`; see [heuristics/README.md](heuristics/README.md) and [example-food.ts](heuristics/example-food.ts) for hooks, priority, vetoes and hot reload. Plugins are trusted local code, not a sandbox for chat/model-generated code. [D-25](docs/00-decisions.md#d-25--user-heuristic-hooks-and-hot-reload)
 
 Shipped [inventory-chests.ts](heuristics/inventory-chests.ts) (priority 50) steers nearly-full inventory (≤4 free slots) into own-chest storage, creates/remembers a chest when needed, and vetoes drops unless goal text explicitly contains `drop`. [D-58](docs/00-decisions.md#d-58--inventory-chests-heuristic)
+
+Shipped [tool-durability.ts](heuristics/tool-durability.ts) (priority 40) checks damageable tools/armor each observation, planning anvil repair for valuable repairable gear (including enchanted swords) or gathering/crafting replacements before breakage. `repair_tool` uses actual anvil cost and verifies durability/XP changes. [station-kit.ts](heuristics/station-kit.ts) (priority 45) reserves one crafting table and one furnace against deposit/drop; `craft`/`smelt` place, use and pick up stations they placed, leaving them placed with a location note if recovery fails or a furnace is nonempty. **Bench and RayCraft checks for these additions are pending; no live verification is claimed.** [D-61/D-62](docs/00-decisions.md#d-61--tool-durability-planning-and-anvil-repair) · [Pending checks](docs/50-install-and-verification.md#tool-durability-and-portable-stations--pending)
 
 ## In-game HUD
 

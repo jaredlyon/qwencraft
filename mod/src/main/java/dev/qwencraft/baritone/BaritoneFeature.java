@@ -9,6 +9,7 @@ import baritone.api.pathing.goals.Goal;
 import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.pathing.goals.GoalNear;
 import baritone.api.pathing.goals.GoalXZ;
+import baritone.api.pathing.goals.GoalYLevel;
 import baritone.api.process.IBaritoneProcess;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
@@ -62,6 +63,8 @@ public final class BaritoneFeature {
 		final IBaritoneProcess process;
 		Runnable start;
 		String lastPathEvent;
+		/** Goal of a goto task; Baritone reports arrival at it with a CANCELED path event. */
+		Goal goal;
 		boolean sawControl;
 		boolean signaled;
 		boolean lostControl;
@@ -117,25 +120,32 @@ public final class BaritoneFeature {
 
 		Qc.register("qc.baritone.goto", ctx -> Qc.onMain(() -> {
 			requireWork();
-			int x = coordinate(ctx.getDouble("x"), "x");
-			int z = coordinate(ctx.getDouble("z"), "z");
 			Goal goal;
-			if (!ctx.has("y")) {
-				goal = new GoalXZ(x, z);
+			if (!ctx.has("x") && !ctx.has("z") && ctx.has("y")) {
+				// Any column at that height: far easier to path than one exact block (used to dig down to ore height).
+				goal = new GoalYLevel(coordinate(ctx.getDouble("y"), "y"));
 			} else {
-				int y = coordinate(ctx.getDouble("y"), "y");
-				if (ctx.has("range")) {
-					double range = ctx.getDouble("range");
-					if (!Double.isFinite(range) || range < 0 || Math.floor(range) > 46340) {
-						throw RpcException.badRequest("range must be finite and between 0 and 46340 (Baritone squares an int)");
-					}
-					goal = new GoalNear(new BlockPos(x, y, z), (int)Math.floor(range));
+				int x = coordinate(ctx.getDouble("x"), "x");
+				int z = coordinate(ctx.getDouble("z"), "z");
+				if (!ctx.has("y")) {
+					goal = new GoalXZ(x, z);
 				} else {
-					goal = new GoalBlock(x, y, z);
+					int y = coordinate(ctx.getDouble("y"), "y");
+					if (ctx.has("range")) {
+						double range = ctx.getDouble("range");
+						if (!Double.isFinite(range) || range < 0 || Math.floor(range) > 46340) {
+							throw RpcException.badRequest("range must be finite and between 0 and 46340 (Baritone squares an int)");
+						}
+						goal = new GoalNear(new BlockPos(x, y, z), (int)Math.floor(range));
+					} else {
+						goal = new GoalBlock(x, y, z);
+					}
 				}
 			}
-			return start("goto", baritone.getCustomGoalProcess(),
+			JsonObject started = start("goto", baritone.getCustomGoalProcess(),
 					() -> baritone.getCustomGoalProcess().setGoalAndPath(goal));
+			task.goal = goal;
+			return started;
 		}));
 		Qc.register("qc.baritone.mine", ctx -> Qc.onMain(() -> {
 			requireWork();
@@ -303,8 +313,15 @@ public final class BaritoneFeature {
 	private static void pathEvent(PathEvent event) {
 		Task current = task;
 		if (current == null || current.start != null || current.canceled || current.lostControl) return;
+		String previous = current.lastPathEvent;
 		current.lastPathEvent = event.name();
 		String state = pathState(event);
+		// CustomGoalProcess ends both arrival ("we're there") and calculation failure with CANCEL_AND_SET_GOAL,
+		// which Baritone reports as CANCELED. Tell them apart so the controller doesn't treat arrival as failure.
+		if (event == PathEvent.CANCELED && current.goal != null) {
+			if (current.goal.isInGoal(baritone.getPlayerContext().playerFeet())) state = "at_goal";
+			else if ("CALC_FAILED".equals(previous) || "NEXT_CALC_FAILED".equals(previous)) state = "calc_failed";
+		}
 		if (state != null) signal(current, state, null);
 	}
 

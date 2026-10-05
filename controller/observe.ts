@@ -42,6 +42,7 @@ export async function observe(env: SkillEnv, extra: { goal: string | null; lastR
   const reads: Array<[string, string, Record<string, unknown>]> = [
     ["session", "session.info", {}], ["player", "player.getState", {}],
     ["inventory", "player.getInventory", {}], ["equipment", "player.getEquipment", {}],
+    ["tools", "qc.inventory.tools", {}],
     ["effects", "player.getStatusEffects", {}],
     ["terrain", "perception.scan", { radius: 1, find: env.config.protect.naturalBlocks.filter(id => id.endsWith("_log") || id.endsWith("_ore")).slice(0, 32), findLimit: 16 }],
     ["entities", "perception.entities", { radius: 16 }], ["timeWeather", "qc.world.state", {}],
@@ -88,10 +89,18 @@ export async function observe(env: SkillEnv, extra: { goal: string | null; lastR
     values.inventory = { counts, freeSlots: Math.max(0, 36 - stored), selectedSlot: inv.selectedSlot, hotbar: inv.hotbar, armor: inv.armor, offhand: inv.offhand, equipment: values.equipment };
   }
   delete values.equipment;
+  if (values.tools !== null) {
+    const tools = record(values.tools).tools;
+    values.tools = (Array.isArray(tools) ? tools : []).map(raw => {
+      const tool = record(raw), max = Number(tool.maxDamage), left = max - Number(tool.damage);
+      const enchantments = Array.isArray(tool.enchantments) ? tool.enchantments : [];
+      return { slot: tool.slot, id: tool.id, left, max, pct: Math.round(100 * left / max), enchanted: enchantments.length > 0, enchantments, repairWith: tool.repairWith, repairCost: tool.repairCost };
+    }).sort((a, b) => a.pct - b.pct);
+  }
   const notes = env.notes.get();
   // Put must-consider messages first so a large ambient batch cannot crowd them out.
   const chat = [...extra.recentChat].sort((a, b) => Number(b.mentionsMe || b.kind === "whisper") - Number(a.mentionsMe || a.kind === "whisper"));
-  const budgets: Record<string, number> = { session: 500, player: 1100, inventory: 2700, effects: 600, terrain: 2800, entities: 2000, timeWeather: 300, control: 300, task: 500, ownBlocksNearby: 2200, recentChat: 1800, lastResult: 900, hints: 500, goals: 500, zones: 400 };
+  const budgets: Record<string, number> = { session: 500, player: 1100, inventory: 2700, tools: 1500, effects: 600, terrain: 2800, entities: 2000, timeWeather: 300, control: 300, task: 500, ownBlocksNearby: 2200, recentChat: 1800, lastResult: 900, hints: 500, goals: 500, zones: 400 };
   const observation: Observation = { ...values, goals: extra.goal === null ? [] : [extra.goal], home: notes.home ?? env.config.home, zones: [...env.config.protect.zones, ...notes.zones], recentChat: chat, lastResult: extra.lastResult, hints: extra.hints };
   for (const [field, budget] of Object.entries(budgets)) observation[field] = compact(observation[field], budget, field, omitted);
   observation.metadata = { at, acquiredAt, unavailable, omitted, scanRadiusUnit: "chunks", entityRadiusUnit: "blocks", chatOrder: "addressed-first", terrainScope: "loaded chunks only", entityLimit: 64 };

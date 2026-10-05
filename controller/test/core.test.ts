@@ -256,7 +256,7 @@ test('chat replies independently while a body tool is blocked; lane histories an
     await toolStarted.promise;
     f.loop.wake('chat', incoming(1));
     const first = await f.next();
-    assert.equal(first.messages.length, 2); assert.equal(first.thinking, false); assert.equal(first.timeoutMs, 30000);
+    assert.equal(first.messages.length, 2); assert.equal(first.thinking, false); assert.equal(first.timeoutMs, 60000);
     assert.deepEqual(first.tools.map(tool => tool.name).sort(), ['chat_reply', 'chat_say', 'harness_info', 'observe']);
     assert.deepEqual(lanePayload(first).mustReply, [{id: 1, from: 'Alex', kind: 'player', text: 'Jared, how is it going?'}]);
     assert.equal((lanePayload(first).live as Record<string, unknown>).currentAction, 'remember');
@@ -543,7 +543,7 @@ test('thinking is limited to new console instructions and their failed-tool repl
     const request = await Promise.race([pending.promise, cancelled.promise]);
     assert.deepEqual(request.sources, [source]);
     assert.equal(request.thinking, thinking, source);
-    assert.equal(request.timeoutMs, thinking ? 90000 : 30000, source);
+    assert.equal(request.timeoutMs, thinking ? 300000 : 60000, source);
     return request;
   }
   try {

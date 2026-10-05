@@ -230,12 +230,17 @@ test("notes writes are serialized/atomic, corrupt reads preserve data, and serve
 
 test("observations aggregate inventory, label failures/truncation and keep client world sources", async () => {
   const seen: string[] = [];
-  let placedUnavailable = false;
+  let placedUnavailable = false, toolsUnavailable = false;
   const values: Record<string, unknown> = {
     "session.info": { worldId: "mp:localhost", dimension: "minecraft:overworld" },
     "player.getState": { x: 0, y: 64, z: 0, health: 20, food: 14 },
     "player.getInventory": { hotbar: [{ id: "minecraft:apple", count: 2, slot: 0 }], main: [{ id: "minecraft:apple", count: 3, slot: 9 }], armor: [], offhand: { empty: true } },
     "player.getEquipment": { mainHand: { id: "minecraft:apple", count: 2 } },
+    "qc.inventory.tools": { tools: [
+      { slot: 9, id: "minecraft:diamond_sword", damage: 12, maxDamage: 1561, enchantments: ["minecraft:sharpness 3"], repairWith: ["minecraft:diamond"], repairCost: 2 },
+      { slot: "legs", id: "minecraft:diamond_leggings", damage: 400, maxDamage: 500, enchantments: ["minecraft:protection 4"], repairWith: ["minecraft:diamond"], repairCost: 0 },
+      { slot: 5, id: "minecraft:stone_pickaxe", damage: 122, maxDamage: 131, enchantments: [], repairWith: ["minecraft:cobblestone"], repairCost: 0 },
+    ] },
     "perception.scan": { chunks: Array.from({ length: 80 }, (_, cx) => ({ cx, cz: 0, y: 64, counts: { "minecraft:oak_log": 99 } })), pois: [] },
     "perception.entities": { entities: [{ kind: "hostile", uuid: "mob", x: 1, y: 64, z: 1, distance: 1 }] },
     "qc.world.state": { dimension: "minecraft:overworld", dayTime: 100, gameTime: 100, raining: false, thundering: false },
@@ -246,6 +251,7 @@ test("observations aggregate inventory, label failures/truncation and keep clien
     bridge: { health: async () => true, async rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
       seen.push(method);
       if (method === "player.getStatusEffects") throw Error("unavailable");
+      if (method === "qc.inventory.tools" && toolsUnavailable) throw Error("tools unavailable");
       if (method === "qc.placed.near") {
         assert.deepEqual(params, { x: 0, y: 64, z: 0, radius: 6 });
         if (placedUnavailable) throw Error("placed unavailable");
@@ -257,6 +263,11 @@ test("observations aggregate inventory, label failures/truncation and keep clien
   const inventory = obs.inventory as Record<string, unknown>;
   assert.deepEqual(inventory.counts, { "minecraft:apple": 5 });
   assert.deepEqual(obs.ownBlocksNearby, Array.from({ length: 32 }, (_, x) => [x, 64, 0, "minecraft:cobblestone"]));
+  assert.deepEqual(obs.tools, [
+    { slot: 5, id: "minecraft:stone_pickaxe", left: 9, max: 131, pct: 7, enchanted: false, enchantments: [], repairWith: ["minecraft:cobblestone"], repairCost: 0 },
+    { slot: "legs", id: "minecraft:diamond_leggings", left: 100, max: 500, pct: 20, enchanted: true, enchantments: ["minecraft:protection 4"], repairWith: ["minecraft:diamond"], repairCost: 0 },
+    { slot: 9, id: "minecraft:diamond_sword", left: 1549, max: 1561, pct: 99, enchanted: true, enchantments: ["minecraft:sharpness 3"], repairWith: ["minecraft:diamond"], repairCost: 2 },
+  ]);
   assert.equal(obs.effects, null);
   const metadata = obs.metadata as { unavailable: Record<string, string>; omitted: string[] };
   assert.equal(metadata.unavailable.effects, "unavailable");
@@ -264,7 +275,14 @@ test("observations aggregate inventory, label failures/truncation and keep clien
   assert.ok(seen.includes("qc.world.state") && !seen.some(name => name.startsWith("world.")));
   assert.ok(JSON.stringify(obs).length < 16000);
   assert.deepEqual(await tickSnapshot(env), { health: 20, food: 14, pos: [0, 64, 0], hostilesNear: 1, paused: false });
+  values["qc.inventory.tools"] = { tools: Array.from({ length: 30 }, (_, slot) => ({ slot, id: "minecraft:bow", damage: 300, maxDamage: 384, enchantments: [], repairWith: [], repairCost: 0 })) };
+  const crowded = await observe(env, { goal: null, lastResult: null, recentChat: [], hints: [] });
+  assert.ok(JSON.stringify(crowded.tools).length <= 1500);
+  const crowdedMetadata = crowded.metadata;
+  assert.ok(crowdedMetadata && typeof crowdedMetadata === "object" && "omitted" in crowdedMetadata);
+  assert.ok(Array.isArray(crowdedMetadata.omitted) && crowdedMetadata.omitted.includes("tools"));
   placedUnavailable = true;
+  toolsUnavailable = true;
   const failed = await observe(env, { goal: null, lastResult: null, recentChat: [], hints: [] });
   assert.equal(failed.ownBlocksNearby, null);
   const failedMetadata = failed.metadata;
@@ -272,6 +290,9 @@ test("observations aggregate inventory, label failures/truncation and keep clien
   const failedUnavailable = failedMetadata.unavailable;
   assert.ok(failedUnavailable && typeof failedUnavailable === "object" && "ownBlocksNearby" in failedUnavailable);
   assert.equal(failedUnavailable.ownBlocksNearby, "placed unavailable");
+  assert.equal(failed.tools, null);
+  assert.ok(failedUnavailable && typeof failedUnavailable === "object" && "tools" in failedUnavailable);
+  assert.equal(failedUnavailable.tools, "tools unavailable");
 });
 
 test("redaction preserves code identifiers, repo-relative names and the DGX Spark product phrase", () => {

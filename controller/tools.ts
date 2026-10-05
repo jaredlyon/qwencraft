@@ -52,6 +52,7 @@ export const TOOLS: ToolDef[] = [
   define("mine", "Mine a supported natural block for count NEW units of its drop. For ores (e.g. iron_ore) it digs down and branch-mines at the ore's best height, finding ore by itself; call it directly, no need to explore first.", { block: text, count }, ["block", "count"]),
   define("craft", "Produce count NEW units using unlocked recipes and authorized/own crafting stations.", itemCount, ["item", "count"]),
   define("smelt", "Produce count NEW units using a known recipe and an authorized/own furnace.", { ...itemCount, fuel: text }, ["item", "count"]),
+  define("repair_tool", "Repair a damaged tool or armor piece on an anvil at x/y/z using its repair material (XP levels are spent). Picks the most damaged stack of that item.", { item: text, ...xyz }, ["item", "x", "y", "z"]),
   define("place_block", "Place held block item at exactly the requested target; face selects its support face.", { item: text, ...xyz, face }, ["item", "x", "y", "z"]),
   define("break_block", "Break one loaded natural unprotected block in survival mode.", xyz, ["x", "y", "z"]),
   define("equip", "Equip an item in a hand or armor slot.", { item: text, slot: { type: "string", enum: ["mainHand", "offHand", "helmet", "chest", "legs", "boots"] } }, ["item"]),

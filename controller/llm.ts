@@ -14,7 +14,8 @@ export function createLlm(c: Config): {complete(messages: ChatMessage[], tools: 
     });
     const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs)]) : AbortSignal.timeout(opts.timeoutMs);
     const response = await fetch(`${c.llm.baseUrl}/chat/completions`, {method: 'POST', headers: {'Content-Type': 'application/json'}, signal,
-      body: JSON.stringify({model: c.llm.model, messages: replay, ...(tools.length ? {tools: toolsForLlm(tools), tool_choice: 'auto'} : {}), max_tokens: opts.thinking ? 4096 : 1024, chat_template_kwargs: {enable_thinking: opts.thinking, preserve_thinking: false}})});
+      // Thinking turns used up to ~2,400 tokens live; 8,192 leaves headroom (~4 min at ~32 tok/s) before truncation.
+      body: JSON.stringify({model: c.llm.model, messages: replay, ...(tools.length ? {tools: toolsForLlm(tools), tool_choice: 'auto'} : {}), max_tokens: opts.thinking ? 8192 : 1024, chat_template_kwargs: {enable_thinking: opts.thinking, preserve_thinking: false}})});
     if (!response.ok) throw new Error(`LLM HTTP ${response.status}: ${(await response.text().catch(() => '')).slice(0, 200)}`);
     const data: unknown = await response.json();
     if (!data || typeof data !== 'object' || !('choices' in data) || !Array.isArray(data.choices) || data.choices.length !== 1) throw new Error('Invalid LLM choices');

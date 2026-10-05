@@ -39,7 +39,7 @@ const heuristic: Heuristic = {
       chests.length
         ? `Deposit surplus with chest_deposit into a chest you own at ${chests.join(" | ")}.`
         : `No chest of yours is nearby or remembered (recall kind "chest" if you used one before): otherwise craft a chest (8 planks), place_block it near home, remember it with kind "chest", then chest_deposit into it.${free === 0 ? " With 0 free slots the chest has nowhere to go: first place_block something you carry (e.g. your crafting table, which you need anyway, or a bulk block) to free a slot." : ""}`,
-      `Store bulk blocks first${bulk.length ? ` (${bulk.join(", ")})` : ""}; keep tools, weapons, armour, food, torches and materials for the current goal. Never use other players' chests. Do not drop items: they get picked straight back up.`,
+      `Store bulk blocks first${bulk.length ? ` (${bulk.join(", ")})` : ""}; keep tools, weapons, armour, food, torches, crafting table, furnace and materials for the current goal. Never use other players' chests. Do not drop items: they get picked straight back up.`,
     ];
   },
   onPlanProposed(call, obs) {
