@@ -290,6 +290,8 @@ Record model/HTTP latency and public-facing action explanations, but exclude bea
 
 The terminal is the only instruction channel; command words below are reserved, and all other free text becomes the new instruction with cancel-and-replan. [D-05] [D-20]
 
+Input sits on a `qwencraft> ` prompt on the bottom line. Every controller message prints above it, and the prompt is redrawn with whatever has been typed so far, so output never splits a half-typed command. [Ctl-console]
+
 | Exact command | Implemented behavior | Basis |
 |---|---|---|
 | `<free text>` | Replace instruction, increment generation, cancel current work, observe and replan. | [D-05] [D-20] |
@@ -396,3 +398,4 @@ Upstream links below are commit-pinned; built `qc.*` and controller behavior cit
 [Ctl-selfinfo]: ../controller/selfinfo.ts
 [Ctl-events]: ../controller/events.ts
 [Ctl-llm]: ../controller/llm.ts
+[Ctl-console]: ../controller/console.ts

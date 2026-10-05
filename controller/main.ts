@@ -6,7 +6,7 @@ import { createBridge } from './bridge.ts';
 import { createEvents } from './events.ts';
 import { createLlm } from './llm.ts';
 import { createLoop } from './loop.ts';
-import { startConsole } from './console.ts';
+import { print, startConsole } from './console.ts';
 import { createHeuristics } from './heuristics.ts';
 import { createNotesStore } from './memory.ts';
 import { createChatPolicy } from './chat-policy.ts';
@@ -28,7 +28,7 @@ async function main() {
     }
     appendFileSync(transcript, JSON.stringify({at: new Date().toISOString(), kind, ...data}, (key, value: unknown) => ['token','reasoning','reasoning_content','password','base64'].includes(key) ? '[omitted]' : value) + '\n');
   }
-  function log(message: string) {console.log(message); record('console', {message});}
+  function log(message: string) {print(message); record('console', {message});}
   log('Waiting for Minecraft bridge...');
   const bridge = await createBridge(config);
   while (!(await bridge.health())) await delay(1000);

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Bridge, Config, Events, GameEvent } from './types.ts';
+import { print } from './console.ts';
 
 function gameEvent(value: unknown): GameEvent {
   if (!value || typeof value !== 'object' || !('id' in value) || !('type' in value) || !('gameTime' in value) || !('data' in value) || typeof value.id !== 'number' || !Number.isSafeInteger(value.id) || value.id < 1 || typeof value.type !== 'string' || typeof value.gameTime !== 'number') throw new Error('Invalid event envelope');
@@ -13,7 +14,7 @@ export function createEvents(b: Bridge, c: Config, signal: AbortSignal): Events 
   let cursor = 0, ready = false;
   function deliver(event: GameEvent) {
     for (const fn of [...(subscribers.get(event.type) ?? []), ...(subscribers.get('*') ?? [])]) {
-      try { fn(event); } catch (error) { console.error('Event subscriber failed:', error instanceof Error ? error.message : 'unknown error'); }
+      try { fn(event); } catch (error) { print(`Event subscriber failed: ${error instanceof Error ? error.message : 'unknown error'}`); }
     }
   }
   function flush() {
@@ -100,7 +101,7 @@ export function createEvents(b: Bridge, c: Config, signal: AbortSignal): Events 
         interval = setInterval(() => { void reconcile().catch(() => connection.abort()); }, 2000);
         await consume;
       } catch (error) {
-        if (!signal.aborted) console.error('Event connection lost:', error instanceof Error ? error.message : 'unknown error');
+        if (!signal.aborted) print(`Event connection lost: ${error instanceof Error ? error.message : 'unknown error'}`);
       } finally {
         clearInterval(interval); connection.abort(); await reader?.cancel().catch(() => {});
       }

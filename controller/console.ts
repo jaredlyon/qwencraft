@@ -1,4 +1,5 @@
-import { createInterface } from 'node:readline';
+import { createInterface, clearLine, cursorTo } from 'node:readline';
+import type { Interface } from 'node:readline';
 import type { Vec3 } from './types.ts';
 
 export interface ConsoleHandlers {
@@ -11,10 +12,21 @@ export interface ConsoleHandlers {
   error(message: string): void;
 }
 
+let active: Interface | null = null;
+
+/** Prints a line above the input prompt, then redraws the prompt with whatever the operator has typed so far. */
+export function print(message: string): void {
+  if (!active || !process.stdout.isTTY) {console.log(message); return;}
+  clearLine(process.stdout, 0); cursorTo(process.stdout, 0);
+  process.stdout.write(`${message}\n`);
+  active.prompt(true);
+}
+
 export function startConsole(handlers: ConsoleHandlers): () => void {
-  const input = createInterface({input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY});
+  const input = createInterface({input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY, prompt: 'qwencraft> '});
+  active = input; input.prompt();
   input.on('line', line => {
-    const text = line.trim(); if (!text) return;
+    const text = line.trim(); input.prompt(); if (!text) return;
     void (async () => {
       switch (text) {
         case 'stop': await handlers.stop(); return;
@@ -42,5 +54,5 @@ export function startConsole(handlers: ConsoleHandlers): () => void {
     })().catch(error => handlers.error(error instanceof Error ? error.message : 'Console command failed'));
   });
   input.on('close', () => {void Promise.resolve(handlers.quit()).catch(error => handlers.error(error instanceof Error ? error.message : 'Shutdown failed'));});
-  return () => {input.removeAllListeners('close'); input.close();};
+  return () => {active = null; input.removeAllListeners('close'); input.close();};
 }
