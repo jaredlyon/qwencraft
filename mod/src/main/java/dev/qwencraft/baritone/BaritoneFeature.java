@@ -225,6 +225,8 @@ public final class BaritoneFeature {
 		settings.legitMine.value = false;
 		settings.chatControl.value = false;
 		settings.prefixControl.value = false;
+		// Baritone prints status/failure lines into the local chat HUD; send them to the game log instead.
+		settings.logger.value = message -> Qc.LOG.info("[Baritone] {}", message.getString());
 		Set<String> allowed = new HashSet<>(QcState.protect.naturalBlocks());
 		List<Block> disallowed = new ArrayList<>();
 		for (Block block : BuiltInRegistries.BLOCK) {

@@ -87,6 +87,8 @@ function listIngredients(recipe: ObjectValue): string[][] {
 const foodItems: Record<string, true> = Object.fromEntries("apple baked_potato beef beetroot beetroot_soup bread carrot chicken chorus_fruit cod cooked_beef cooked_chicken cooked_cod cooked_mutton cooked_porkchop cooked_rabbit cooked_salmon cookie dried_kelp enchanted_golden_apple golden_apple golden_carrot honey_bottle melon_slice mushroom_stew mutton poisonous_potato porkchop potato pufferfish pumpkin_pie rabbit rabbit_stew rotten_flesh salmon spider_eye suspicious_stew sweet_berries glow_berries tropical_fish".split(" ").map(id => [itemId(id), true]));
 const safeFoods: Record<string, true> = Object.fromEntries("bread cooked_beef cooked_chicken cooked_cod cooked_mutton cooked_porkchop cooked_rabbit cooked_salmon baked_potato carrot apple beetroot pumpkin_pie melon_slice cookie dried_kelp sweet_berries glow_berries mushroom_stew rabbit_stew beetroot_soup golden_carrot".split(" ").map(id => [itemId(id), true]));
 const outcomes = new WeakMap<Bridge, ToolResult[]>();
+/** Consecutive Baritone path-calculation failures (~2 s apart) after which a job is declared unreachable. */
+export const MAX_PATH_FAILURES = 5;
 const cleanupMethods = ["qc.baritone.stop", "interact.stopBreaking", "control.stopUsing", "nav.stop", "control.stop"];
 export async function stopMotion(env: SkillEnv): Promise<string[]> {
   const failed: string[] = [];
@@ -133,7 +135,17 @@ class Skill {
   }
   async job(method: string, params: ObjectValue, success: () => Promise<boolean>, timeout = 120000): Promise<boolean> {
     let early: ObjectValue | null = null;
-    const remove = this.env.events.on("qc.task", event => { try { early = object(event.data); } catch { /* Ignore unrelated malformed event. */ } });
+    // Consecutive calc_failed events per task, reset by at_goal. Baritone's mine process retries forever by
+    // blacklisting one unreachable ore at a time, so a stuck mine must be ended here instead of at the timeout.
+    const failures = new Map<string, number>();
+    const remove = this.env.events.on("qc.task", event => {
+      try {
+        early = object(event.data);
+        const id = string(early.taskId);
+        if (early.state === "calc_failed") failures.set(id, (failures.get(id) ?? 0) + 1);
+        else if (early.state === "at_goal") failures.delete(id);
+      } catch { /* Ignore unrelated malformed event. */ }
+    });
     let taskId = "";
     try {
       const started = await this.rpc(method, params);
@@ -147,6 +159,9 @@ class Skill {
         const player = await this.homePosition();
         if (player.dimension !== initialDimension) throw new Error("movement interrupted: dimension changed");
         if (await success()) return true;
+        if ((failures.get(taskId) ?? 0) >= MAX_PATH_FAILURES) {
+          throw new Error(`no reachable target: path calculation failed ${MAX_PATH_FAILURES} times in a row (protected blocks or terrain in the way); try somewhere else`);
+        }
         const status = await this.rpc("qc.baritone.status");
         const signal = early as ObjectValue | null;
         if (signal?.taskId === taskId) { this.observed.taskEvent = signal; early = null; }

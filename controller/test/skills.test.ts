@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TOOLS, toolsForLlm, validateArguments } from "../tools.ts";
-import { blocksForItem, chooseRecipe, dropForBlock, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId } from "../skills.ts";
-import type { Config, Notes, SkillEnv } from "../types.ts";
+import { MAX_PATH_FAILURES, blocksForItem, chooseRecipe, dropForBlock, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId } from "../skills.ts";
+import type { Config, GameEvent, Notes, SkillEnv } from "../types.ts";
 
 const expected = "observe look_screenshot go_to go_to_player follow_player explore collect mine craft smelt place_block break_block equip eat attack chest_deposit chest_withdraw drop chat_say chat_reply run_command remember recall set_goal finish_goal wait stop harness_info".split(" ");
 
@@ -128,4 +128,44 @@ test("finish_goal accepts free-form summaries after success or an explicit aband
     assert.equal(finished.ok, true);
     assert.equal((finished.observedDelta as Record<string, unknown>).goalFinished, summary);
   }
+});
+
+test("a job that Baritone keeps retrying ends after repeated path failures instead of at the timeout", async () => {
+  const notes: Notes = { home: [0, 64, 0], zones: [], places: [] };
+  const unused = (): never => { throw new Error("unexpected test dependency"); };
+  const listeners: Array<(e: GameEvent) => void> = [];
+  let stopped = false, eventId = 0;
+  const env: SkillEnv = {
+    bridge: {
+      health: async () => true,
+      async rpc<T = unknown>(method: string): Promise<T> {
+        const responses: Record<string, unknown> = {
+          "player.getState": { x: 0, y: 64, z: 0, dimension: "minecraft:overworld" },
+          "qc.baritone.goto": { started: true, taskId: "t1" },
+          "qc.baritone.status": { active: !stopped, taskId: "t1", kind: "goto" },
+          "qc.baritone.stop": { stopped: true },
+          "player.getInventory": { hotbar: [], main: [], armor: [], offhand: {} },
+        };
+        if (method === "qc.baritone.stop") stopped = true;
+        return (responses[method] ?? {}) as T;
+      },
+    },
+    config: { home: null, selfGoal: { radius: 256 }, protect: { naturalBlocks: [], zones: [] } } as unknown as Config,
+    notes: { get: () => notes, update: unused },
+    events: {
+      on(_type, fn) { listeners.push(fn); return () => {}; },
+      async next(type) {
+        // Baritone reports a fresh calc_failed for the same task on every wait.
+        for (const fn of listeners) fn({ id: ++eventId, type, gameTime: 0, data: { taskId: "t1", kind: "goto", state: "calc_failed" } });
+        return null;
+      },
+    },
+    chat: { route: unused, say: unused, reply: unused },
+    signal: new AbortController().signal,
+    log: () => {},
+  };
+  const result = await TOOLS.find(t => t.name === "go_to")!.run({ x: 20, z: 20 }, env);
+  assert.equal(result.ok, false);
+  assert.match(result.summary, new RegExp(`path calculation failed ${MAX_PATH_FAILURES} times in a row`));
+  assert.equal(stopped, true);
 });
