@@ -39,7 +39,9 @@ Write a default-export heuristic in `heuristics/*.ts`; see [heuristics/README.md
 
 ## Safety and pending live install
 
-F8/manual takeover relinquish controls **and disable Java reflexes**. Console `stop`/`quit` and the 3-second dead-man lease cancel planned work but leave survival reflexes active; use a safe full-food fixture for those checks. **F8/manual takeover still require operator physical-input testing.** Console stops send no chat disclosure. [Stop semantics](docs/40-chat-and-safety.md#6-stop-precedence-and-residual-reflexes) · [Bench scope](docs/50-install-and-verification.md#local-bench--observed-2026-10-04)
+F8/manual takeover relinquish controls **and disable Java reflexes**. Console `stop`/`quit` and the 3-second dead-man lease cancel planned work but leave survival reflexes active; use a safe full-food fixture for those checks. **F8/manual takeover still require operator physical-input testing.** [Stop semantics](docs/40-chat-and-safety.md#6-stop-precedence-and-residual-reflexes) · [Bench scope](docs/50-install-and-verification.md#local-bench--observed-2026-10-04)
+
+Other players see chat only when Jared types in-game himself (or uses unchanged operator-console `say <text>`) or the agent replies to another player's message. Activation and control changes are silent; no unprompted narration/status. Code rejects `chat_say` / `chat_reply` unless the current request contains an incoming non-self `player`/`whisper` message in observation `recentChat` or pending `mustReply`. AI explanation when asked and allowlisted commands such as `/home` remain allowed. [D-47](docs/00-decisions.md#d-47--reply-only-agent-chat)
 
 Mod action-path guards enforce natural-block/free-zone breaking, chat pacing/length, command allowlist and `#` rejection; controller checks additionally enforce a horizontal home radius and code-redact outgoing network/secrets/local paths, not game coordinates. Guards are not ownership detection or an anti-cheat guarantee. [Safety design](docs/40-chat-and-safety.md) · [D-44](docs/00-decisions.md#d-44--code-enforced-outgoing-redaction)
 

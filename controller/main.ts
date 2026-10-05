@@ -122,11 +122,7 @@ async function main() {
       await bridge.rpc('qc.control.lease', {ttlMs: config.lease.ttlMs});
       const control = await bridge.rpc<{paused: boolean}>('qc.control.state');
       if (control.paused || operatorPaused || signal.aborted) return;
-      if (!activated) {
-        activated = true;
-        await chat.announceStart().catch(handleError);
-        await delay(config.chat.minIntervalMs, undefined, {signal});
-      }
+      activated = true;
       await resolveHome(signal);
       if (!operatorPaused && !signal.aborted) loop.resume();
     } finally {
@@ -203,7 +199,7 @@ async function main() {
       case 'qc.pause':
         if (payload.paused === true) {
           loop.pause(String(payload.reason)); lifecycle.abort();
-          if (payload.reason === 'hotkey' || payload.reason === 'manual_input') {operatorPaused = true; void chat.announceTakeover().catch(handleError);}
+          if (payload.reason === 'hotkey' || payload.reason === 'manual_input') operatorPaused = true;
         } else if (payload.paused === false && activated && connected && !shuttingDown) {
           const owner = lifecycle;
           void bridge.rpc<{paused: boolean}>('qc.control.state').then(control => {

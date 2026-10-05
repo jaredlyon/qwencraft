@@ -126,7 +126,7 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 **Evidence:** MCPFabric has `control.stop`; Baritone notes that `cancelEverything()` can finish an uncancelable movement, so cancellation alone is not proof of released input. [Control API][mcp-control] [Cancellation caveat][baritone-cancel]
 
-**Consequences/risks:** cancel Baritone, clear movement booleans, stop mining/navigation/item use and synthetic attack/use; `control.stop` alone is insufficient, and takeover disclosure never delays release. Reflexes stay active under console/lease pauses; human-control reasons upgrade those pauses and disable reflexes. Physical state uses 26.3 SDL APIs, not synthetic mapping state. [D-11, D-16, D-32] [mod/src/main/java/dev/qwencraft/control/ControlFeature.java](../mod/src/main/java/dev/qwencraft/control/ControlFeature.java) [mod/src/main/java/dev/qwencraft/QcState.java](../mod/src/main/java/dev/qwencraft/QcState.java) `[VERIFY]` operator must physically prove F8/manual takeover and repeat all four stops on RayCraft, with safe full-food/no-hazard console and lease fixtures. [D-38]
+**Consequences/risks:** cancel Baritone, clear movement booleans, stop mining/navigation/item use and synthetic attack/use; `control.stop` alone is insufficient. Reflexes stay active under console/lease pauses; human-control reasons upgrade those pauses and disable reflexes. Physical state uses 26.3 SDL APIs, not synthetic mapping state. [D-11, D-32] [mod/src/main/java/dev/qwencraft/control/ControlFeature.java](../mod/src/main/java/dev/qwencraft/control/ControlFeature.java) [mod/src/main/java/dev/qwencraft/QcState.java](../mod/src/main/java/dev/qwencraft/QcState.java) `[VERIFY]` operator must physically prove F8/manual takeover and repeat all four stops on RayCraft, with safe full-food/no-hazard console and lease fixtures. [D-38]
 
 ## D-12 — Shared `.minecraft` installation
 
@@ -170,13 +170,13 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 ## D-16 — Explicit AI disclosure
 
-**Decision:** announce agent activation and hotkey/manual-input human takeover, and explain that SirWaffleshnoz is agent-controlled when asked; no prefix on every message. On 2026-10-04 the operator dropped the earlier console-stop disclosure: console `stop`/`quit` send no announcement. [D-16] [controller/chat-policy.ts](../controller/chat-policy.ts) [controller/main.ts](../controller/main.ts)
+**Decision:** explain that SirWaffleshnoz is agent-controlled when asked; no prefix on every message. D-47 removed this decision's start/stop announcements on 2026-10-04; its “explain when asked” rule remains. [D-16, D-47] [controller/chat-policy.ts](../controller/chat-policy.ts)
 
 **Alternatives considered:** prefix every outgoing message. [D-16]
 
 **Evidence:** MCPFabric sends outgoing chat through the local player's normal connection, not as a separately named agent account. [Sending path][mcp-chat-send]
 
-**Consequences/risks:** start/activation says "Hi! SirWaffleshnoz is now being played by an AI agent (Qwen, run by Jared). Ask me what I'm doing."; hotkey/manual-input takeover says "Jared has control of SirWaffleshnoz again."; no announcement on console `stop`/`quit`, `lease_expired` or disconnect (operator dropped the console-stop disclosure, 2026-10-04). Stop announcements are best-effort, obey the common send limits and never delay releasing inputs; explain agent control when asked. [D-16, D-18, D-11]
+**Consequences/risks:** explain agent control in replies when asked, subject to normal send limits and D-47's reply-only gate. Activation and control changes produce no chat. [D-16, D-18, D-47]
 
 ## D-17 — Other players may converse, not command
 
@@ -196,7 +196,7 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 **Evidence:** Paper documents chat/command spam controls; MCPFabric's send handler itself uses the ordinary connection send path. [Paper properties][paper-properties] [Sending][mcp-chat-send]
 
-**Consequences/risks:** operator `say`, disclosures, commands and whisper replies remain rate-limited; split long replies into at most two independently spaced messages. [D-18, D-36] `[INFERENCE]` these limits reduce exposure but cannot promise RayCraft plugin acceptance. [D-18, D-02] [Paper properties][paper-properties]
+**Consequences/risks:** operator `say`, public replies, commands and whisper replies remain rate-limited; split long replies into at most two independently spaced messages. [D-18, D-36, D-47] `[INFERENCE]` these limits reduce exposure but cannot promise RayCraft plugin acceptance. [D-18, D-02] [Paper properties][paper-properties]
 
 ## D-19 — Idle survival autonomy
 
@@ -485,6 +485,16 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 **Evidence:** pre-amendment bench turns classified as thinking-enabled planning took roughly **50–82 seconds**, versus about **3–6 seconds** on ordinary turns, near the thinking request's 90-second deadline. These are sampled bench observations, not a controlled speedup or latency guarantee: examples include 49,678 ms, 81,899 ms and 56,681 ms on resumed planning, and 3,335/4,433 ms on ordinary steps. [bench/logs/2026-10-05T01-31-21-487Z.jsonl](../bench/logs/2026-10-05T01-31-21-487Z.jsonl) [bench/logs/2026-10-05T01-37-15-335Z.jsonl](../bench/logs/2026-10-05T01-37-15-335Z.jsonl) [bench/logs/2026-10-05T01-48-06-684Z.jsonl](../bench/logs/2026-10-05T01-48-06-684Z.jsonl) [controller/llm.ts](../controller/llm.ts)
 
 **Consequences/risks:** routine wakes may still plan actions, but “planning” in the thinking switch means only the two console-instruction cases above. Keep normal/thinking limits 1,024/4,096 completion tokens and deadlines 30/90 seconds; no stale-generation response gains authority from thinking. Raw bench transcripts are local runtime evidence, not public repository artifacts. [D-46, D-20, D-21, D-06] [controller/llm.ts](../controller/llm.ts) [Controller policy](30-controller.md#3-llm-request-and-history-policy)
+
+## D-47 — Reply-only agent chat
+
+**Decision:** remove all control-transition chat and permit agent chat only in response to another player's message. This supersedes D-16's “announce on start/stop” part, not its “explain when asked” rule. Date: 2026-10-04; source: operator follow-up adjudication. [D-47, D-16]
+
+**Alternatives considered:** retain activation or human-takeover messages; suppress only console-stop messages; rely on the prompt alone to prevent unprompted chat. None meets the operator's reply-only requirement. [D-47]
+
+**Evidence:** operator text: “remove all chat messages about control being passed between me and the agent. the only time any other players should see something in chat is when i type directly through chat myself or the agent decides to respond in chat to somebody.” [D-47]
+
+**Consequences/risks:** Jared's direct in-game chat and operator-console `say <text>` remain available. The agent never sends unprompted narration, status or control-transition messages. `chat_say` / `chat_reply` are rejected in code with `{ok:false, summary:"chat is only for replying to another player's message"}` unless the current planning request carries at least one incoming non-self `player` or `whisper` chat event in observation `recentChat` or a pending `mustReply` entry; the system prompt states the same reply-only rule. Own echoes, system text and old rolling-history messages do not authorize a chat tool call. Replies may explain AI control when asked; allowlisted commands such as `/home` are not chat and remain permitted under their existing guards. [D-47, D-16, D-17, D-18, D-29, D-36]
 
 ## Tensions accepted by the operator
 

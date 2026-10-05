@@ -7,7 +7,7 @@ Phase 1 gives the local Qwen model a guarded body in the user's visible Minecraf
 | In scope | Boundary / non-goal | Decisions |
 |---|---|---|
 | Visible `SirWaffleshnoz` client, Fabric companion mod, Baritone navigation | No second account, headless replacement client, or server-side control deployment | [D-01] [D-08] |
-| Console tasks, chat Q&A, AI disclosure, idle survival progression | Other players can ask questions, not issue action instructions | [D-05] [D-16] [D-17] [D-19] [D-31] |
+| Console tasks, chat Q&A, AI explanation when asked, idle survival progression | Other players can ask questions, not issue action instructions; agent chat is reply-only | [D-05] [D-16] [D-17] [D-19] [D-31] [D-47] |
 | Curated skills, hot-reloaded `heuristics/*.ts`, JSON notes | No model-generated executable code or general plugin framework | [D-09] [D-25] [D-33] |
 | Four stop controls, action-path guards, bounded session recovery | No guarantee of third-party server permission or anti-cheat acceptance | [D-02] [D-10] [D-11] [D-24] [D-34] |
 | Phase-1 harness documentation | Blueprint/house architecture is deferred, not a hidden dependency of this harness | [D-00] |
@@ -157,9 +157,9 @@ MCPFabric HTTP workers schedule client handlers on the Minecraft executor and wa
 | Baritone | Tick-driven goal process with distinct failure/control-loss paths. [goal process](https://github.com/cabaletta/baritone/blob/25111daedf1d59e6a8dfb5a3e61885cdb8d953df/src/main/java/baritone/process/CustomGoalProcess.java#L98-L134) | Companion owns task correlation and emits only progress/failure/control-loss events; controller alone declares done/failed after postcondition verification, never from inactivity alone. [D-08] [D-09] [D-42] |
 | Spark vLLM | Model inference, separate from game-thread execution. [D-03] [serving args](evidence/vllm-container-args.txt) | Slow/down inference must not block physical takeover or local reflexes. [D-11] [D-32] |
 
-Pause releases all synthetic controls: movement, mining, navigation, item use, attack/use, and Baritone work—not just movement booleans—and emits `qc.pause`; a stop announcement is best-effort and never delays release. [D-11] [D-16] [D-35] Baritone documents that cancellation can leave an uncancelable movement finishing, so the hard-stop claim must be demonstrated with the actual mixins and client version. [Baritone cancellation](https://github.com/cabaletta/baritone/blob/25111daedf1d59e6a8dfb5a3e61885cdb8d953df/src/api/java/baritone/api/behavior/IPathingBehavior.java#L74-L105) [VERIFY] Distinguish physical from synthetic input and prove all four stop controls release the complete input set. [D-11] [D-38]
+Pause releases all synthetic controls: movement, mining, navigation, item use, attack/use, and Baritone work—not just movement booleans—and emits `qc.pause`. [D-11] [D-35] Baritone documents that cancellation can leave an uncancelable movement finishing, so the hard-stop claim must be demonstrated with the actual mixins and client version. [Baritone cancellation](https://github.com/cabaletta/baritone/blob/25111daedf1d59e6a8dfb5a3e61885cdb8d953df/src/api/java/baritone/api/behavior/IPathingBehavior.java#L74-L105) [VERIFY] Distinguish physical from synthetic input and prove all four stop controls release the complete input set. [D-11] [D-38]
 
-Disclosure on activation uses: "Hi! SirWaffleshnoz is now being played by an AI agent (Qwen, run by Jared). Ask me what I'm doing."; `hotkey`/`manual_input` pause uses: "Jared has control of SirWaffleshnoz again."; console `stop`/`quit`, `lease_expired` and disconnect emit no disclosure announcement. [D-16] [D-11] [D-35]
+Chat appears only when Jared types in-game himself (or uses operator-console `say <text>`) or the agent replies to another player's message. Activation, F8/manual takeover, stop/quit, lease expiry and disconnect produce no lifecycle chat. Code rejects `chat_say` / `chat_reply` unless the current request contains an incoming non-self `player`/`whisper` event in observation `recentChat` or pending `mustReply`; the system prompt also requires reply-only output. AI explanation when asked and allowlisted commands such as `/home` remain permitted. [D-47] [D-16] [D-29]
 
 ## 8. Failure domains and recovery
 
@@ -180,7 +180,7 @@ The dead-man protects loss of the controller, not loss of the model while a heal
 
 | Read next | Contract ownership | Decisions |
 |---|---|---|
-| [00-decisions.md](00-decisions.md) | Operator adjudications and accepted tensions | [D-00]–[D-42] |
+| [00-decisions.md](00-decisions.md) | Operator adjudications and accepted tensions | [D-00]–[D-47] |
 | [20-companion-mod.md](20-companion-mod.md) | Java/Fabric baseline, RPC/event tables, tick ownership, guards, HUD, client session hooks | [D-08] [D-11] [D-13] [D-14] [D-23] [D-32] |
 | [30-controller.md](30-controller.md) | Tools/postconditions, observations, generation loop, heuristics, notes, console, outage policy | [D-04] [D-05] [D-07] [D-09] [D-20] [D-25] [D-33] |
 | [40-chat-and-safety.md](40-chat-and-safety.md) | Trust boundaries, disclosure, chat/command limits, build protection, stop precedence, account risk | [D-10] [D-11] [D-15] [D-16] [D-17] [D-18] [D-26] |

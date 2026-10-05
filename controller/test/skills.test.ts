@@ -98,7 +98,7 @@ test("finish_goal accepts free-form summaries after success or an explicit aband
     config: { commands: { allowlist: ["/sethome"] } } as Config,
     notes: { get: () => notes, update: unused },
     events: { on: unused, next: unused },
-    chat: { route: unused, say: unused, reply: unused, announceStart: unused, announceTakeover: unused },
+    chat: { route: unused, say: unused, reply: unused },
     signal: new AbortController().signal,
     log: unused,
   };

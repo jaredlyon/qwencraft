@@ -93,20 +93,18 @@ Prerequisites: Node 24.12+, the checked-in Gradle wrapper/vendor JARs, and JDK 2
    collect 4 oak logs
    ```
 
-   `home set` records the current client position; it is not `/sethome`. The default horizontal home radius is 256 blocks. The initial natural-block list is a starting allowlist to review, not permission to break any crafted block. The activation disclosure intentionally retains the spec's `SirWaffleshnoz` wording even though this offline client is `QwenBench`.
+   `home set` records the current client position; it is not `/sethome`. The default horizontal home radius is 256 blocks. The initial natural-block list is a starting allowlist to review, not permission to break any crafted block. Activation and control changes produce no lifecycle chat. Other players see chat only when Jared types in-game himself (or uses unchanged controller-console `say <text>`) or the agent replies to another player's message. Code rejects agent chat tools unless the current request contains an incoming non-self `player`/`whisper` event in observation `recentChat` or pending `mustReply`; allowlisted commands such as `/home` remain separate. [D-47](../docs/00-decisions.md#d-47--reply-only-agent-chat)
 
 ## Local checks and shutdown
 
 Run these from `D:/qwencraft` in Terminal B while the client/controller remain visible:
 
 ```powershell
-node bench/rcon.ts "say QwenBench, are you an AI?"
-node bench/rcon.ts "tell QwenBench what are you doing?"
 node bench/rpc.ts qc.baritone.status '{}'
 node --% bench/rpc.ts events.getRecent "{\"limit\":100,\"sinceId\":0}"
 ```
 
-Check actual chat replies, events, inventory changes and motion, not merely successful RPC submission. Test F8 and physical input takeover while supervised. In the controller terminal, `stop` releases agent actions; `resume` explicitly rearms them; `quit` pauses/releases and exits. Console `stop`/`quit` send no disclosure. F8/manual input also disable Java reflexes; console/dead-man pauses leave survival reflexes enabled. Do stop/dead-man checks in a safe full-food location.
+For conversation checks, have a consenting second player join the loopback bench and ask `QwenBench, are you an AI?` in player chat, then privately ask what the agent is doing. RCON `say` is system text, not a player message that authorizes agent chat. Check actual replies, events, inventory changes and motion, not merely successful RPC submission. Confirm an unprompted chat tool attempt returns `{ok:false, summary:"chat is only for replying to another player's message"}` without sending. Test F8 and physical input takeover while supervised. In the controller terminal, `stop` releases agent actions; `resume` explicitly rearms them; `quit` pauses/releases and exits. None produces lifecycle chat. F8/manual input also disable Java reflexes; console/dead-man pauses leave survival reflexes enabled. Do stop/dead-man checks in a safe full-food location.
 
 Shutdown order: enter `quit` in Terminal D, close the development Minecraft client in Terminal C, then stop Paper from Terminal B:
 

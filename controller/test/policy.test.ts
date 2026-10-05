@@ -100,18 +100,14 @@ test("two-line replies respect the mod guard and retry a rate-limited line once"
   });
 });
 
-test("disclosures are exact, self echoes do not loop, and repeated other-player text stays distinct", async () => {
+test("self echoes do not loop, and repeated other-player text stays distinct", async () => {
   const c = structuredClone(config); c.chat.minIntervalMs = 0;
-  const { bridge, sent } = recordingBridge();
+  const { bridge } = recordingBridge();
   const chat = createChatPolicy(c, bridge, emptyHost, () => ctx);
-  await chat.announceStart();
-  await chat.announceTakeover();
-  assert.deepEqual(sent.map(line => line.text), ["Hi! SirWaffleshnoz is now being played by an AI agent (Qwen, run by Jared). Ask me what I'm doing.", "Jared has control of SirWaffleshnoz again."]);
   await chat.say("hello");
   assert.deepEqual(chat.route(event("<SirWaffleshnoz> hello", { kind: "system", senderName: null, senderUuid: null })), { kind: "ignore" });
   assert.deepEqual(chat.route(event("hello")), { kind: "model", mustConsider: false });
   assert.deepEqual(chat.route(event("hello", { id: 2, senderName: "Steve" })), { kind: "model", mustConsider: false });
-  assert.ok(!("announceStop" in chat));
 });
 
 test("UTF-16 reply budget never bisects astral characters; rejected sends are not successes", async () => {

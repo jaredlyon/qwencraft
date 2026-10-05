@@ -89,7 +89,7 @@ test('loop keeps aborted model requests single flight and discards late tool pro
   const events: Events = {on() {return () => {};}, async next() {return null;}};
   const notes: Notes = {home: null, zones: [], places: []};
   const store: NotesStore = {get() {return notes;}, async update(fn) {fn(notes);}};
-  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}, async announceStart() {}, async announceTakeover() {}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
   const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
   const first = Promise.withResolvers<LlmReply>();
   let calls = 0, running = 0, peak = 0;
@@ -163,7 +163,6 @@ test('addressed whispers stay in mustReply until a successful private reply', {t
       assert.equal(to, 'Rcon'); assert.equal(privately, true);
       replyStarted.resolve(); await allowReply.promise; return {ok: true, summary: 'sent'};
     },
-    async announceStart() {}, async announceTakeover() {},
   };
   const loop = createLoop({config, bridge, events, notes, chat, heuristics, log() {}, record() {}, llm: {
     async complete(messages) {
@@ -189,6 +188,85 @@ test('addressed whispers stay in mustReply until a successful private reply', {t
     allowReply.resolve();
     assert.deepEqual((await Promise.race([afterReply.promise, cancelled.promise])).mustReply, []);
   } finally {allowReply.resolve(); await loop.close();}
+});
+
+test('chat tools require incoming player chat in the current request or a pending reply', {timeout: 5000}, async t => {
+  const config = loadConfig(DEFAULT_CONFIG_PATH);
+  const sent: string[] = [], results: unknown[] = [];
+  const bridge: Bridge = {
+    async health() {return true;},
+    async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+      if (method === 'qc.chat.send') sent.push(String(params.text));
+      const responses: Record<string, unknown> = {
+        'qc.control.state': {paused: false}, 'qc.chat.send': {sent: true},
+        'player.getState': {x: 0,y: 64,z: 0,health: 20,food: 20,dimension: 'minecraft:overworld'},
+        'player.getInventory': {hotbar: [], main: [], armor: [], offhand: {}}, 'player.getEquipment': {}, 'player.getStatusEffects': {effects: []},
+        'perception.entities': {entities: []}, 'perception.scan': {chunks: [], pois: []}, 'qc.world.state': {dimension: 'minecraft:overworld'},
+        'qc.baritone.status': {active: false}, 'session.info': {worldId: 'test', dimension: 'minecraft:overworld'},
+      };
+      return (responses[method] ?? {}) as T;
+    },
+  };
+  const events: Events = {on() {return () => {};}, async next() {return null;}};
+  const state: Notes = {home: null, zones: [], places: []};
+  const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
+  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  const chat: ChatPolicy = {
+    route() {return {kind: 'ignore'};},
+    async say(text) {await bridge.rpc('qc.chat.send', {text}); return {ok: true, summary: 'sent'};},
+    async reply(to, text, privately) {
+      assert.equal(to, 'Rcon'); assert.equal(privately, true);
+      await bridge.rpc('qc.chat.send', {text: `/msg ${to} ${text}`}); return {ok: true, summary: 'sent'};
+    },
+  };
+  const afterRejected = Promise.withResolvers<void>(), afterAllowed = Promise.withResolvers<void>(), afterHistory = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<never>();
+  t.signal.addEventListener('abort', () => cancelled.reject(new Error('Reply-only chat regression cancelled')), {once: true});
+  let requests = 0;
+  function propose(...names: Array<'chat_say' | 'chat_reply'>): LlmReply {
+    return {content: null, reasoning: null, usage: {}, toolCalls: names.map((name, i) => ({
+      id: `${requests}-${i}`, type: 'function', function: {name, arguments: JSON.stringify(name === 'chat_say' ? {text: 'Hello!'} : {to: 'Rcon', text: 'I am an AI agent.'})},
+    }))};
+  }
+  const loop = createLoop({config, bridge, events, notes, chat, heuristics, log(message) {
+    if (message.startsWith('Loop failure:')) cancelled.reject(new Error(message));
+  }, record(kind, data) {if (kind === 'tool_result') results.push(data.result);}, llm: {
+    async complete(messages) {
+      const current = messages.findLast(message => message.role === 'user' && typeof message.content === 'string');
+      assert.ok(current && current.role === 'user' && typeof current.content === 'string');
+      const payload = JSON.parse(current.content) as {wakeSources: string[]; mustReply: unknown[]; observation: {recentChat: unknown[]}};
+      requests++;
+      if (requests === 1) {
+        assert.ok(payload.wakeSources.includes('instruction'));
+        const prompt = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
+        assert.match(prompt, /Use chat_say\/chat_reply only to respond to another player's message/);
+        return propose('chat_say', 'chat_reply');
+      }
+      if (requests === 2) afterRejected.resolve();
+      if (requests === 3) {assert.equal(payload.observation.recentChat.length, 1); return propose('chat_say');}
+      if (requests === 4) {
+        assert.deepEqual(payload.observation.recentChat, []); assert.equal(payload.mustReply.length, 1);
+        return propose('chat_reply');
+      }
+      if (requests === 5) {assert.deepEqual(payload.mustReply, []); afterAllowed.resolve();}
+      if (requests === 6) return propose('chat_say');
+      if (requests === 7) afterHistory.resolve();
+      return {content: null, reasoning: null, toolCalls: [], usage: {}};
+    },
+  }});
+  const rejected = {ok: false, summary: "chat is only for replying to another player's message"};
+  try {
+    loop.instruction('collect logs'); loop.resume();
+    await Promise.race([afterRejected.promise, cancelled.promise]);
+    assert.deepEqual(results, [rejected, rejected]); assert.deepEqual(sent, []);
+    loop.wake('chat', {id: 42, kind: 'whisper', senderUuid: null, senderName: 'Rcon', text: 'Hello! Are you an AI?', signed: false, mentionsMe: true, self: false});
+    await Promise.race([afterAllowed.promise, cancelled.promise]);
+    assert.deepEqual(results.slice(2), [{ok: true, summary: 'sent', observedDelta: {}}, {ok: true, summary: 'sent', observedDelta: {}}]);
+    assert.deepEqual(sent, ['Hello!', '/msg Rcon I am an AI agent.']);
+    loop.wake('instruction');
+    await Promise.race([afterHistory.promise, cancelled.promise]);
+    assert.deepEqual(results.at(-1), rejected); assert.equal(sent.length, 2);
+  } finally {await loop.close();}
 });
 
 test('console stop wins while resume is waiting for its lease RPC', async () => {
@@ -279,7 +357,7 @@ test('thinking is limited to new console instructions and their failed-tool repl
   const events: Events = {on() {return () => {};}, async next() {return null;}};
   const state: Notes = {home: [0,64,0], zones: [], places: []};
   const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
-  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}, async announceStart() {}, async announceTakeover() {}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
   const heuristics: HeuristicsHost = {
     onObservation() {return [];},
     onPlanProposed(call) {return call.name === 'go_to' ? {veto: 'path blocked'} : call;},
@@ -341,8 +419,8 @@ test('thinking is limited to new console instructions and their failed-tool repl
     loop.wake('tool completion');
     (await expectRequest('tool completion', false)).answer(plain);
 
-    loop.instruction('say hello');
-    (await expectRequest('instruction', true)).answer({content: null, reasoning: null, toolCalls: [{id: 'successful-chat', type: 'function', function: {name: 'chat_say', arguments: '{"text":"Hello!"}'}}], usage: {}});
+    loop.instruction('remember this place');
+    (await expectRequest('instruction', true)).answer({content: null, reasoning: null, toolCalls: [{id: 'successful-note', type: 'function', function: {name: 'remember', arguments: '{"kind":"landmark","name":"Here","note":"A place to revisit."}'}}], usage: {}});
     (await expectRequest('tool completion', false)).answer(plain);
     config.llm.thinking = 'off'; loop.instruction('another terminal task');
     (await expectRequest('instruction', false)).answer(failedTool('off-goto'));
@@ -366,7 +444,7 @@ test('a Java reflex pause cancels planning without releasing the body; other pau
   const events: Events = {on() {return () => {};}, async next() {return null;}};
   const notes: Notes = {home: null, zones: [], places: []};
   const store: NotesStore = {get() {return notes;}, async update(fn) {fn(notes);}};
-  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}, async announceStart() {}, async announceTakeover() {}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
   const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
   const loop = createLoop({config, bridge, events, notes: store, chat, heuristics, log() {}, record() {}, llm: {async complete() {return {content: 'idle', reasoning: null, toolCalls: [], usage: {}};}}});
   try {

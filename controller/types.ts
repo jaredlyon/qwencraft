@@ -118,9 +118,6 @@ export interface ChatPolicy {
   say(text: string): Promise<ToolResult>;
   /** Private reply via `/msg <to> <text>` (whisper) or public addressed reply. */
   reply(to: string, text: string, privately: boolean): Promise<ToolResult>;
-  /** Fixed disclosure strings (docs/40-chat-and-safety.md). */
-  announceStart(): Promise<void>;
-  announceTakeover(): Promise<void>;
 }
 
 // ---------- LLM (llm.ts) ----------

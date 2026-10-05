@@ -75,15 +75,6 @@ export function createChatPolicy(c: Config, b: Bridge, h: HeuristicsHost, ctx: (
     return job;
   }
 
-  async function announce(text: string): Promise<void> {
-    try {
-      const result = await send(text, "");
-      if (!result.ok) ctx().log(`Announcement not sent: ${result.summary}`);
-    } catch (error) {
-      ctx().log(`Announcement not sent: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
   return {
     route(e: ChatEvent) {
       const decision = h.onChat(e, ctx());
@@ -107,7 +98,5 @@ export function createChatPolicy(c: Config, b: Bridge, h: HeuristicsHost, ctx: (
       if (privateSend && (!privately || !c.commands.allowlist.includes("/msg"))) return Promise.resolve({ ok: false, summary: "command_not_allowed" });
       return send(text, privateSend ? `/msg ${to} ` : `${to}: `);
     },
-    announceStart() { return announce("Hi! SirWaffleshnoz is now being played by an AI agent (Qwen, run by Jared). Ask me what I'm doing."); },
-    announceTakeover() { return announce("Jared has control of SirWaffleshnoz again."); },
   };
 }
