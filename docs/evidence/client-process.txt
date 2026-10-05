@@ -1,0 +1,7 @@
+# captured 2026-10-04T23:40:35Z from waffle-house
+$ javaw CommandLine (filtered: username/version/gameDir/versionType only; secrets omitted)
+
+--username SirWaffleshnoz
+--version 26.3
+--gameDir C:\Users\jlyon\AppData\Roaming\.minecraft
+--versionType release

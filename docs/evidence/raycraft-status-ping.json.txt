@@ -1,0 +1,42 @@
+# captured 2026-10-04T23:40:42Z from waffle-house
+$ Server List Ping (handshake protocol 777, next_state=status) to raycraft.ddnsfree.com:25565 resolved 104.59.225.221
+
+{
+ "description": {
+  "text": "",
+  "extra": [
+   {
+    "text": "RayCraft",
+    "color": "aqua",
+    "bold": true
+   },
+   "\\n",
+   {
+    "text": "Come build something. Try not to break everything.",
+    "color": "gray"
+   }
+  ]
+ },
+ "players": {
+  "max": 40,
+  "online": 3,
+  "sample": [
+   {
+    "id": "a4a4a571-a7f5-4baa-ae50-56cd6e842e92",
+    "name": "ray4390"
+   },
+   {
+    "id": "473d6b4e-6451-40f3-bf74-1c1fdfccadf7",
+    "name": "SirWaffleshnoz"
+   },
+   {
+    "id": "5e18061d-ed6e-4d13-96d4-571daa6670fc",
+    "name": "sanagum"
+   }
+  ]
+ },
+ "version": {
+  "name": "Paper 26.3",
+  "protocol": 777
+ }
+}

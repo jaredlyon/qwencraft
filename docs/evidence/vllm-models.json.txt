@@ -1,0 +1,4 @@
+# captured 2026-10-04T23:40:34Z from waffle-house
+$ curl -s --max-time 5 http://192.168.100.2:8000/v1/models
+
+{"object":"list","data":[{"id":"qwen3.8-flash-next","object":"model","created":1791157234,"owned_by":"vllm","root":"/hf/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47-fp8hybrid","parent":null,"max_model_len":262144,"permission":[{"id":"modelperm-ba9fa94b06275c2c","object":"model_permission","created":1791157234,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}

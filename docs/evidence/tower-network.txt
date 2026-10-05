@@ -1,0 +1,50 @@
+# captured 2026-10-04T23:40:35Z from waffle-house
+$ ipconfig   (global/tailnet addresses redacted 2026-10-04 before public release)
+
+
+Windows IP Configuration
+
+
+Unknown adapter Tailscale:
+
+   Connection-specific DNS Suffix  . : taild4c940.ts.net
+   IPv6 Address. . . . . . . . . . . : [redacted-tailnet-ipv6]
+   Link-local IPv6 Address . . . . . : fe80::705d:f8bf:1fe3:1d38%36
+   IPv4 Address. . . . . . . . . . . : [redacted-tailnet-ipv4]
+   Subnet Mask . . . . . . . . . . . : 255.255.255.255
+   Default Gateway . . . . . . . . . : 
+
+Ethernet adapter Ethernet:
+
+   Connection-specific DNS Suffix  . : 
+   Link-local IPv6 Address . . . . . : fe80::2095:5825:c32e:1cbc%14
+   IPv4 Address. . . . . . . . . . . : 192.168.100.1
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 
+
+Wireless LAN adapter Wi-Fi 2:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+
+Wireless LAN adapter Wi-Fi 3:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+
+Wireless LAN adapter Wi-Fi:
+
+   Connection-specific DNS Suffix  . : attlocal.net
+   IPv6 Address. . . . . . . . . . . : [redacted-global-ipv6]
+   IPv6 Address. . . . . . . . . . . : [redacted-global-ipv6]
+   Temporary IPv6 Address. . . . . . : [redacted-global-ipv6]
+   Link-local IPv6 Address . . . . . : fe80::78:7f11:96b9:625b%19
+   IPv4 Address. . . . . . . . . . . : 192.168.1.175
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::e7c:28ff:fea7:9e2c%19
+                                       192.168.1.254
+
+Ethernet adapter Bluetooth Network Connection:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 

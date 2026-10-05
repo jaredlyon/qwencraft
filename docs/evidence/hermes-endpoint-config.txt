@@ -1,0 +1,11 @@
+# captured 2026-10-05T00:06:26Z from waffle-house
+$ ssh spark "grep -nE 'base_url|api:|default_model|provider: spark' ~/.hermes/config.yaml | head -n 8"  (endpoint/model lines only; no secrets)
+
+3:  provider: spark
+4:  base_url: http://127.0.0.1:8000/v1
+7:    api: http://127.0.0.1:8000/v1
+10:    default_model: qwen3.8-nvfp4
+187:    provider: spark
+189:    base_url: http://192.168.100.2:11435/v1
+196:    base_url: ''
+202:    base_url: ''

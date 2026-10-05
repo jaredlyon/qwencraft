@@ -1,0 +1,39 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+// Test bench: `gradlew runClient` joins the local offline Paper server started by ../bench/server.ts.
+loom {
+	runs {
+		client {
+			programArgs "--quickPlayMultiplayer", "127.0.0.1:25570", "--username", "QwenBench"
+		}
+	}
+}
+
+// Pinned, checksum-verified jars (see ../vendor/SHA256SUMS). Neither has a usable published Maven coordinate for 26.3.
+def vendor = rootProject.file('../vendor')
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	implementation files("${vendor}/mcpfabric-0.5.0+26.3.jar", "${vendor}/baritone-api-fabric-1.20.0.jar")
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}

@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"package": "dev.qwencraft.control.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": ["MouseHandlerMixin", "KeyMappingMixin", "BotControllerMixin", "GameModeMixin"],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

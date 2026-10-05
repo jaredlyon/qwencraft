@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "qwencraft",
+	"version": "${version}",
+	"name": "qwencraft",
+	"description": "Companion mod that lets the qwencraft controller drive this client through MCPFabric and Baritone.",
+	"authors": ["jaredlyon"],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["dev.qwencraft.QwencraftClient"]
+	},
+	"mixins": [
+		"qwencraft.guards.mixins.json",
+		"qwencraft.control.mixins.json",
+		"qwencraft.baritone.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*",
+		"mcpfabric": "0.5.0+26.3",
+		"baritone": "1.20.0"
+	}
+}

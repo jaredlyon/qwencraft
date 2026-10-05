@@ -1,0 +1,15 @@
+{
+	"required": true,
+	"package": "dev.qwencraft.guards.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"MultiPlayerGameModeMixin",
+		"ClientPacketListenerMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

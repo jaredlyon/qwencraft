@@ -1,0 +1,107 @@
+# captured 2026-10-04T23:40:45Z from waffle-house
+$ 5 sequential POST /v1/chat/completions by subagent AgentLoopAndModel on 2026-10-04 (results JSON as recorded by that agent)
+
+{
+  "endpoint": "http://192.168.100.2:8000/v1/chat/completions",
+  "model": "qwen3.8-flash-next",
+  "scope": "Exactly five sequential small requests; max_tokens caps 180/120/80/40/80; 137 actual completion tokens total. No installation, gameplay, or container modification.",
+  "results": [
+    {
+      "request": "tools function + tool_choice:auto + thinking:false",
+      "http": 200,
+      "wall_seconds": 0.823,
+      "prompt_tokens": 271,
+      "completion_tokens": 14,
+      "finish_reason": "tool_calls",
+      "observed_message": {
+        "content": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-976aa3663aaf7964",
+            "type": "function",
+            "function": {
+              "name": "get_inventory",
+              "arguments": "{}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": "thinking:true; 17×23",
+      "http": 200,
+      "wall_seconds": 1.3955,
+      "prompt_tokens": 67,
+      "completion_tokens": 48,
+      "reasoning_tokens": 42,
+      "finish_reason": "stop",
+      "observed_message": {
+        "content": "\n\n391",
+        "reasoning": "We need answer user: \"Compute 17 times 23; reply with the integer only.\" Need final only integer. 17*23=391. Ensure no extra.\n"
+      }
+    },
+    {
+      "request": "thinking:false; short wood explanation",
+      "http": 200,
+      "wall_seconds": 1.0772,
+      "prompt_tokens": 26,
+      "completion_tokens": 30,
+      "reasoning_tokens": 0,
+      "completion_tokens_per_wall_second": 27.85,
+      "finish_reason": "stop",
+      "observed_message": {
+        "reasoning": null,
+        "content": "Wood is the essential first resource because it is required to craft the wooden pickaxe needed to mine stone and progress through the game's tech tree."
+      }
+    },
+    {
+      "request": "thinking:false; generated 32×32 red PNG data-URL",
+      "http": 200,
+      "wall_seconds": 0.7854,
+      "prompt_tokens": 90,
+      "image_tokens": 64,
+      "completion_tokens": 2,
+      "reasoning_tokens": 0,
+      "finish_reason": "stop",
+      "observed_message": {
+        "content": " red",
+        "reasoning": null
+      }
+    },
+    {
+      "request": "thinking:false; short survival advice, streaming",
+      "http": 200,
+      "wall_seconds": 1.5539,
+      "ttft_seconds": 0.2329,
+      "first_to_last_content_seconds": 1.3209,
+      "prompt_tokens": 28,
+      "completion_tokens": 43,
+      "reasoning_tokens": 0,
+      "completion_tokens_per_wall_second": 27.67,
+      "approximate_decode_tokens_per_second": 31.8,
+      "observed_delta_fields": [
+        "content",
+        "role"
+      ]
+    }
+  ],
+  "interpretation": "Native automatic function calling works. Thinking is separated in message.reasoning, NOT reasoning_content on this vLLM build; enable_thinking:false produces reasoning:null and zero reasoning_tokens. Vision input is genuinely accepted and the red image identified; this is not a gameplay-vision quality test. Throughput 27.67–27.85 tok/s includes HTTP/prefill; streaming approximate decode=(43−1)/1.3209=31.8 tok/s, not a sustained benchmark. No load/queue-contention test.",
+  "container_arguments_observed": {
+    "command": "ssh spark 'docker inspect qwen38-flash --format \"{{json .Args}}\"'",
+    "tool_call_parser": "qwen3_coder",
+    "reasoning_parser": "qwen3",
+    "enable_auto_tool_choice": true,
+    "max_num_seqs": 8,
+    "speculative_config": {
+      "method": "mtp",
+      "num_speculative_tokens": 2
+    },
+    "max_model_len": 262144,
+    "enable_prefix_caching": true,
+    "max_num_batched_tokens": 8192,
+    "chat_template": "/qwen38/chat_template.jinja",
+    "system_fingerprint_from_responses": "vllm-0.30.0-fcd37b56"
+  },
+  "full_output": "artifact://40:raw; launch arguments artifact://13:raw"
+}

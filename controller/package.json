@@ -1,0 +1,16 @@
+{
+  "name": "qwencraft-controller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.12" },
+  "scripts": {
+    "start": "node main.ts",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

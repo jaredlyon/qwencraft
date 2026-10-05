@@ -1,0 +1,7 @@
+# captured 2026-10-04T23:40:35Z from waffle-house
+$ node -v && python --version && where java && git --version
+
+v24.12.0
+Python 3.14.0
+C:\Program Files (x86)\Common Files\Oracle\Java\java8path\java.exe
+git version 2.50.1.windows.1

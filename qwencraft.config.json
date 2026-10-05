@@ -1,0 +1,38 @@
+{
+  "llm": {"baseUrl": "http://192.168.100.2:8000/v1", "model": "qwen3.8-flash-next", "thinking": "planning"},
+  "chat": {"nicknames": ["SirWaffleshnoz", "waffle"], "wholeWords": ["bot", "ai"], "minIntervalMs": 3000, "maxLen": 256, "maxLinesPerReply": 2},
+  "commands": {"allowlist": ["/spawn", "/home", "/sethome", "/msg", "/r"]},
+  "protect": {
+    "naturalBlocks": [
+      "minecraft:oak_log", "minecraft:oak_wood", "minecraft:oak_leaves",
+      "minecraft:spruce_log", "minecraft:spruce_wood", "minecraft:spruce_leaves",
+      "minecraft:birch_log", "minecraft:birch_wood", "minecraft:birch_leaves",
+      "minecraft:jungle_log", "minecraft:jungle_wood", "minecraft:jungle_leaves",
+      "minecraft:acacia_log", "minecraft:acacia_wood", "minecraft:acacia_leaves",
+      "minecraft:dark_oak_log", "minecraft:dark_oak_wood", "minecraft:dark_oak_leaves",
+      "minecraft:mangrove_log", "minecraft:mangrove_wood", "minecraft:mangrove_leaves", "minecraft:mangrove_roots", "minecraft:muddy_mangrove_roots",
+      "minecraft:cherry_log", "minecraft:cherry_wood", "minecraft:cherry_leaves",
+      "minecraft:pale_oak_log", "minecraft:pale_oak_wood", "minecraft:pale_oak_leaves",
+      "minecraft:crimson_stem", "minecraft:crimson_hyphae", "minecraft:warped_stem", "minecraft:warped_hyphae", "minecraft:nether_wart_block", "minecraft:warped_wart_block",
+      "minecraft:stone", "minecraft:deepslate", "minecraft:andesite", "minecraft:diorite", "minecraft:granite", "minecraft:tuff", "minecraft:calcite",
+      "minecraft:coal_ore", "minecraft:iron_ore", "minecraft:copper_ore", "minecraft:gold_ore", "minecraft:redstone_ore", "minecraft:emerald_ore", "minecraft:lapis_ore", "minecraft:diamond_ore",
+      "minecraft:deepslate_coal_ore", "minecraft:deepslate_iron_ore", "minecraft:deepslate_copper_ore", "minecraft:deepslate_gold_ore", "minecraft:deepslate_redstone_ore", "minecraft:deepslate_emerald_ore", "minecraft:deepslate_lapis_ore", "minecraft:deepslate_diamond_ore",
+      "minecraft:nether_gold_ore", "minecraft:nether_quartz_ore", "minecraft:ancient_debris",
+      "minecraft:dirt", "minecraft:coarse_dirt", "minecraft:rooted_dirt", "minecraft:grass_block", "minecraft:podzol", "minecraft:mycelium", "minecraft:mud",
+      "minecraft:sand", "minecraft:red_sand", "minecraft:gravel", "minecraft:clay",
+      "minecraft:snow", "minecraft:snow_block", "minecraft:ice",
+      "minecraft:short_grass", "minecraft:tall_grass", "minecraft:fern", "minecraft:large_fern", "minecraft:dead_bush", "minecraft:vine",
+      "minecraft:dandelion", "minecraft:poppy", "minecraft:blue_orchid", "minecraft:allium", "minecraft:azure_bluet", "minecraft:red_tulip", "minecraft:orange_tulip", "minecraft:white_tulip", "minecraft:pink_tulip", "minecraft:oxeye_daisy", "minecraft:cornflower", "minecraft:lily_of_the_valley", "minecraft:wither_rose", "minecraft:sunflower", "minecraft:lilac", "minecraft:rose_bush", "minecraft:peony", "minecraft:torchflower", "minecraft:pitcher_plant", "minecraft:closed_eyeblossom", "minecraft:open_eyeblossom", "minecraft:wildflowers",
+      "minecraft:netherrack", "minecraft:soul_sand", "minecraft:soul_soil", "minecraft:basalt", "minecraft:blackstone", "minecraft:end_stone"
+    ],
+    "zones": []
+  },
+  "home": null,
+  "selfGoal": {"radius": 256},
+  "reflex": {"eatAtFood": 14},
+  "reconnect": {"maxPerHour": 3, "backoffMs": [30000, 120000, 600000], "stopPatterns": ["ban", "banned", "kicked by"]},
+  "lease": {"ttlMs": 3000, "intervalMs": 1000},
+  "server": {"host": "raycraft.ddnsfree.com", "port": 25565},
+  "bridge": {"url": "http://127.0.0.1:25599", "configPath": "C:/Users/jlyon/AppData/Roaming/.minecraft/config/mcpfabric.config.json"},
+  "paths": {"heuristicsDir": "heuristics", "notesFile": "notes.json", "transcriptDir": "controller/logs"}
+}
