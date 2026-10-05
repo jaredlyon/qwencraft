@@ -156,22 +156,12 @@ public final class BaritoneFeature {
 				if (!id.getPath().endsWith("_ore") && !ids[i].equals("minecraft:ancient_debris")) allOres = false;
 			}
 			boolean legitMine = allOres;
+			// The controller owns the per-ore height table and digs down first; it passes that height as `y`.
+			int branchY = ctx.optInt("y", Minecraft.getInstance().player.getBlockY());
 			return start("mine", baritone.getMineProcess(), () -> {
 				Settings settings = BaritoneAPI.getSettings();
 				settings.legitMine.value = legitMine;
-				if (legitMine) {
-					String mineral = ids[0].substring(ids[0].indexOf(':') + 1);
-					if (mineral.startsWith("deepslate_")) mineral = mineral.substring("deepslate_".length());
-					settings.legitMineYLevel.value = switch (mineral) {
-						case "coal_ore" -> 96;
-						case "copper_ore" -> 48;
-						case "iron_ore" -> 16;
-						case "gold_ore" -> -16;
-						case "redstone_ore", "diamond_ore" -> -58;
-						case "lapis_ore" -> 0;
-						default -> Minecraft.getInstance().player.getBlockY();
-					};
-				}
+				if (legitMine) settings.legitMineYLevel.value = branchY;
 				baritone.getMineProcess().mineByName((int)count, ids);
 			});
 		}));

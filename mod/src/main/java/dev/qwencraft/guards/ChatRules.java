@@ -11,6 +11,8 @@ final class ChatRules {
 			Pattern.compile("^(?:<([A-Za-z0-9_]{1,16})>|([A-Za-z0-9_]{1,16})) whispers to you: .*$", CASE_FLAGS),
 			Pattern.compile("^\\[([A-Za-z0-9_]{1,16}) -> me\\] .*$", CASE_FLAGS),
 			Pattern.compile("^From ([A-Za-z0-9_]{1,16}): .*$", CASE_FLAGS));
+	private static final Pattern DISCORD = Pattern.compile("^Discord \\u2022 (\\S+) \\u00bb (.*)$");
+	private static final GameChat SYSTEM_CHAT = new GameChat("system", null, false);
 	private static final Pattern PUBLIC_ECHO = Pattern.compile("^<([^>]+)> (.*)$");
 	private static final List<Pattern> PRIVATE_ECHO = List.of(
 			Pattern.compile("^You whisper to ([A-Za-z0-9_]{1,16}): (.*)$", CASE_FLAGS),
@@ -58,6 +60,16 @@ final class ChatRules {
 		return null;
 	}
 
+	record GameChat(String kind, String senderName, boolean mentionsMe) {}
+
+	static GameChat gameChat(String text, List<Pattern> patterns) {
+		String sender = whisperSender(text);
+		if (sender != null) return new GameChat("whisper", sender, true);
+		var discord = DISCORD.matcher(text);
+		if (discord.matches()) return new GameChat("player", discord.group(1), mentions(discord.group(2), patterns));
+		return SYSTEM_CHAT;
+	}
+
 	record Sent(String text, String body, String recipient, boolean privateMessage) {
 		static Sent of(String text) {
 			String[] parts = TOKENS.split(text, 3);
@@ -100,6 +112,18 @@ final class ChatRules {
 		assert whisperSender("[Bob -> me] hello").equals("Bob");
 		assert whisperSender("From Bob: hello").equals("Bob");
 		assert whisperSender("someone says From Bob: hello") == null;
+		GameChat discord = gameChat("Discord \u2022 Sam \u00bb Hey jared's ai", mentions);
+		assert discord.kind().equals("player");
+		assert discord.senderName().equals("Sam");
+		assert discord.mentionsMe();
+		assert !gameChat("Discord \u2022 waffle \u00bb hello", mentions).mentionsMe();
+		assert gameChat("Discord \u2022 Sam \u00bb ", mentions).kind().equals("player");
+		assert gameChat("From Bob: Discord \u2022 Sam \u00bb ai", mentions).kind().equals("whisper");
+		assert gameChat("waffle joined the game", mentions).equals(SYSTEM_CHAT);
+		assert gameChat("waffle has made the advancement [Stone Age]", mentions).equals(SYSTEM_CHAT);
+		assert gameChat("waffle died", mentions).equals(SYSTEM_CHAT);
+		assert gameChat("prefix Discord \u2022 Sam \u00bb ai", mentions).equals(SYSTEM_CHAT);
+		assert gameChat("Discord \u2022 Sam Smith \u00bb ai", mentions).equals(SYSTEM_CHAT);
 		assert Sent.of("hello").echoes("<Waffle> hello", "Waffle");
 		assert !Sent.of("hello").echoes("<Bob> hello", "Waffle");
 		assert Sent.of("/msg Bob hello").echoes("[me -> Bob] hello", "Waffle");

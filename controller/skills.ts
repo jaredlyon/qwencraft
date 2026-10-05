@@ -77,6 +77,12 @@ export function blocksForItem(item: string): string[] {
   const id = itemId(item);
   return [...selfDrops, ...Object.keys(drops)].map(itemId).filter(block => dropForBlock(block) === id);
 }
+/** Best height to branch-mine an ore at (deepslate variants share it); undefined = mine at the current height. */
+export function oreHeight(block: string): number | undefined {
+  const heights: Record<string, number> = { coal: 96, copper: 48, iron: 16, gold: -16, redstone: -58, diamond: -58, lapis: 0 };
+  const mineral = /^minecraft:(?:deepslate_)?([a-z]+)_ore$/.exec(itemId(block))?.[1];
+  return mineral === undefined ? undefined : heights[mineral];
+}
 export function chooseRecipe(value: unknown, item: string, type: string): ObjectValue | null {
   const recipes = list(object(value).recipes).filter(r => r.known === true && r.type === type && object(r.result).id === item && number(object(r.result).count) > 0);
   return recipes.sort((a, b) => listIngredients(a).length - listIngredients(b).length || string(a.ref).localeCompare(string(b.ref)))[0] ?? null;
@@ -253,12 +259,16 @@ class Skill {
     await this.env.bridge.rpc("container.close", {}, { timeoutMs: 3000 });
     this.menuId = null;
   }
-  // Counted pickup/right-click/return avoids container.transfer's whole-stack overshoot.
-  async moveCount(source: number, destination: number, count: number): Promise<void> {
+  // Counted pickup/right-click/return avoids container.transfer's whole-stack overshoot. A whole stack going to an
+  // empty slot needs only pickup + place (two clicks instead of one per item, ~20 s per stack on a remote server).
+  async moveCount(source: number, destination: number, count: number, wholeToEmpty = false): Promise<void> {
     this.cursorOrigin = source;
     await this.click(source);
-    for (let i = 0; i < count; i++) await this.click(destination, 1);
-    await this.click(source);
+    if (wholeToEmpty) await this.click(destination);
+    else {
+      for (let i = 0; i < count; i++) await this.click(destination, 1);
+      await this.click(source);
+    }
     this.cursorOrigin = null;
   }
   playerMenuSlot(slot: number, size: number): number { return slot < 9 ? size + 27 + slot : size + slot - 9; }
@@ -282,7 +292,7 @@ class Skill {
       }
       const n = Math.min(left, number(source.count));
       const beforePlayer = itemCount(inv, id), beforeContainer = menuCount(menu, id);
-      await this.moveCount(sourceSlot, target, n);
+      await this.moveCount(sourceSlot, target, n, destinationSlot === undefined && n === number(source.count));
       const expectedPlayer = beforePlayer + (take ? n : -n);
       const end = Math.min(this.deadline, Date.now() + 3000);
       let acknowledged = false;
@@ -350,10 +360,21 @@ async function acquisition(s: Skill, blocks: string[], id: string, count: number
     if (probe.canHarvest !== true) throw new Error("cannot harvest");
     await s.rpc("inventory.selectHotbar", { slot: number(probe.bestSlot) });
   }
+  // Ores: dig down to the mineral's best height first. Baritone's legit mode only "runs away" horizontally from
+  // where it starts, so started on the surface it wanders the surface instead of branch-mining underground.
+  const branchY = ore ? oreHeight(blocks[0]!) : undefined;
+  if (branchY !== undefined) {
+    const here = pos(await s.player());
+    if (here[1] > branchY + 4) {
+      const down = await s.job("qc.baritone.goto", { x: Math.floor(here[0]), y: branchY, z: Math.floor(here[2]) },
+        async () => Math.abs(pos(await s.player())[1] - branchY) <= 2, Math.max(120000, s.deadline - s.now()));
+      if (!down) return result(false, `could not dig down to y=${branchY}`, s.observed);
+    }
+  }
   const before = await s.inventory(), start = itemCount(before, id), targetCount = start + count;
   if (!Number.isSafeInteger(targetCount)) throw new Error("invalid final inventory count");
   let after = before;
-  const ok = await s.job("qc.baritone.mine", { blocks, targetCount }, async () => {
+  const ok = await s.job("qc.baritone.mine", { blocks, targetCount, ...(branchY === undefined ? {} : { y: branchY }) }, async () => {
     after = await s.inventory();
     s.observed.acquisition = { item: id, before: start, after: itemCount(after, id), acquired: inventoryDelta(before, after, id), targetCount };
     return inventoryDelta(before, after, id) >= count;
@@ -371,8 +392,13 @@ async function place(s: Skill, id: string, p: Vec3, face: string): Promise<ToolR
   await s.hold(id);
   await s.rpc("control.lookAt", { x: support[0] + .5 + d[0] * .5, y: support[1] + .5 + d[1] * .5, z: support[2] + .5 + d[2] * .5 });
   await s.rpc("control.setInput", { sneak: true });
+  // Sneak is a movement input the server sees next tick; clicking first would open a crafting table/chest instead.
+  await s.sleep(150);
   try { await s.rpc("interact.placeBlock", { ...coordinates(support), face }); }
-  finally { await s.env.bridge.rpc("control.setInput", { sneak: false }, { timeoutMs: 3000 }); }
+  finally {
+    await s.env.bridge.rpc("control.setInput", { sneak: false }, { timeoutMs: 3000 });
+    await s.env.bridge.rpc("container.close", {}, { timeoutMs: 3000 }).catch(() => {});
+  }
   const end = Math.min(s.deadline, Date.now() + 5000);
   while (Date.now() < end) {
     const block = await s.block(p), after = await s.inventory();

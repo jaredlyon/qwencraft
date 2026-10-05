@@ -57,6 +57,14 @@ test("addressing preserves authoritative flags, Unicode whole words, and self su
   assert.deepEqual(ignored.route(event("hello", { kind: "whisper" })), { kind: "ignore" });
 });
 
+test("system lines are context only even when flags or heuristics request a reply", () => {
+  const { bridge } = recordingBridge();
+  const chat = createChatPolicy(config, bridge, { ...emptyHost, onChat: () => ({ reply: "Do not send this" }) }, () => ctx);
+  assert.deepEqual(chat.route(event("SirWaffleshnoz joined the game", { kind: "system", mentionsMe: true })), { kind: "model", mustConsider: false });
+  assert.deepEqual(chat.route(event("Jared has made an advancement", { kind: "system" })), { kind: "model", mustConsider: false });
+  assert.deepEqual(chat.route(event("Discord • Alex » hey Jared", { kind: "player", senderUuid: null, mentionsMe: true })), { kind: "reply", text: "Do not send this" });
+});
+
 test("chat splits, condenses, paces, and budgets /msg prefix without changing the recipient", async () => {
   const c = structuredClone(config);
   c.chat.maxLen = 40;

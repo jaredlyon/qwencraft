@@ -162,16 +162,19 @@ public final class GuardsFeature {
 		String senderName = profile == null ? null : profile.name();
 		String senderUuid = profile == null ? null : profile.id().toString();
 		String kind = type == null ? "system" : "player";
+		boolean mentionsMe;
 		boolean outgoingWhisper = type != null && type.chatType().is(ChatType.MSG_COMMAND_OUTGOING);
 		if (type != null && (outgoingWhisper || type.chatType().is(ChatType.MSG_COMMAND_INCOMING))) {
 			kind = "whisper";
 			if (senderName == null) senderName = ChatRules.username(type.name().getString());
+			mentionsMe = true;
 		} else if (type == null) {
-			String parsedName = ChatRules.whisperSender(text);
-			if (parsedName != null) {
-				kind = "whisper";
-				senderName = parsedName;
-			}
+			ChatRules.GameChat parsed = ChatRules.gameChat(text, mentions);
+			kind = parsed.kind();
+			senderName = parsed.senderName();
+			mentionsMe = parsed.mentionsMe();
+		} else {
+			mentionsMe = ChatRules.mentions(text, mentions);
 		}
 		Minecraft client = Minecraft.getInstance();
 		boolean self = outgoingWhisper;
@@ -196,7 +199,7 @@ public final class GuardsFeature {
 		event.addProperty("text", text);
 		// Presence/provenance only: this is not a validity or authorization assertion.
 		event.addProperty("signed", profile != null && message != null && message.hasSignatureFrom(profile.id()));
-		event.addProperty("mentionsMe", kind.equals("whisper") || ChatRules.mentions(text, mentions));
+		event.addProperty("mentionsMe", mentionsMe);
 		event.addProperty("self", self);
 		Qc.emit("qc.chat", event);
 	}

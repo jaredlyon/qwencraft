@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { ServerResponse } from 'node:http';
-import type { Bridge, ChatPolicy, Events, GameEvent, HeuristicsHost, LlmReply, Notes, NotesStore, RpcOptions } from '../types.ts';
+import type { Bridge, ChatEvent, ChatMessage, ChatPolicy, Events, GameEvent, HeuristicsHost, LlmReply, Notes, NotesStore, RpcOptions, ToolDef } from '../types.ts';
 
 test('config validates keys and projects only the companion contract', () => {
   const c = loadConfig(DEFAULT_CONFIG_PATH);
@@ -174,13 +174,18 @@ test('LLM strips hidden reasoning on replay and validates native calls', async (
   } finally {globalThis.fetch = originalFetch;}
 });
 
-test('addressed whispers stay in mustReply until a successful private reply', {timeout: 5000}, async t => {
-  const config = loadConfig(DEFAULT_CONFIG_PATH); config.home = [0,64,0];
+interface LaneRequest {
+  messages: ChatMessage[]; tools: ToolDef[]; thinking: boolean; timeoutMs: number; answer(reply: LlmReply): void; fail(error: Error): void;
+}
+function chatLoopFixture(signal: AbortSignal) {
+  const config = loadConfig(DEFAULT_CONFIG_PATH); config.home = null;
+  const state: Notes = {home: null, zones: [], places: []};
+  const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
   const bridge: Bridge = {
     async health() {return true;},
     async rpc<T>(method: string): Promise<T> {
       const responses: Record<string, unknown> = {
-        'qc.control.state': {paused: false}, 'player.getState': {x: 0,y: 64,z: 0,health: 20,food: 20,dimension: 'minecraft:overworld'},
+        'qc.control.state': {paused: false}, 'player.getState': {x: 0, y: 64, z: 0, health: 20, food: 20, dimension: 'minecraft:overworld'},
         'player.getInventory': {hotbar: [], main: [], armor: [], offhand: {}}, 'player.getEquipment': {}, 'player.getStatusEffects': {effects: []},
         'perception.entities': {entities: []}, 'perception.scan': {chunks: [], pois: []}, 'qc.world.state': {dimension: 'minecraft:overworld'},
         'qc.baritone.status': {active: false}, 'session.info': {worldId: 'test', dimension: 'minecraft:overworld'},
@@ -189,145 +194,229 @@ test('addressed whispers stay in mustReply until a successful private reply', {t
     },
   };
   const events: Events = {on() {return () => {};}, async next() {return null;}};
-  const state: Notes = {home: null, zones: [], places: []};
-  const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
-  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
-  const replyStarted = Promise.withResolvers<void>();
-  const allowReply = Promise.withResolvers<void>();
-  const afterReply = Promise.withResolvers<Record<string, unknown>>();
-  const cancelled = Promise.withResolvers<never>();
-  t.signal.addEventListener('abort', () => cancelled.reject(new Error('Must-reply regression cancelled')), {once: true});
-  let firstRequest: Record<string, unknown> | undefined, prompt = '', requests = 0;
-  const chat: ChatPolicy = {
-    route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};},
-    async reply(to, _text, privately) {
-      assert.equal(to, 'Rcon'); assert.equal(privately, true);
-      replyStarted.resolve(); await allowReply.promise; return {ok: true, summary: 'sent'};
-    },
-  };
-  const loop = createLoop({config, bridge, events, notes, chat, heuristics, log() {}, record() {}, llm: {
-    async complete(messages) {
-      const current = messages.findLast(message => message.role === 'user' && typeof message.content === 'string');
-      assert.ok(current && current.role === 'user' && typeof current.content === 'string');
-      const payload = JSON.parse(current.content) as Record<string, unknown>;
-      requests++;
-      if (requests === 1) {
-        firstRequest = payload;
-        prompt = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
-        return {content: null, reasoning: null, toolCalls: [{id: 'answer-rcon', type: 'function', function: {name: 'chat_reply', arguments: '{"to":"Rcon","text":"I use a guarded Fabric client, Baritone, and a TypeScript controller."}'}}], usage: {}};
-      }
-      afterReply.resolve(payload); loop.pause('assert reply payload');
-      return {content: 'Question answered.', reasoning: null, toolCalls: [], usage: {}};
-    },
-  }});
-  try {
-    loop.wake('chat', {id: 42, kind: 'whisper', senderUuid: null, senderName: 'Rcon', text: 'Explain in detail how your harness works.', signed: false, mentionsMe: true, self: false});
-    loop.resume();
-    await Promise.race([replyStarted.promise, cancelled.promise]);
-    assert.deepEqual(firstRequest?.mustReply, [{id: 42, from: 'Rcon', kind: 'whisper', text: 'Explain in detail how your harness works.'}]);
-    assert.match(prompt, /answer every entry with chat_reply \(whispers privately\) or chat_say BEFORE any other tool/);
-    allowReply.resolve();
-    assert.deepEqual((await Promise.race([afterReply.promise, cancelled.promise])).mustReply, []);
-  } finally {allowReply.resolve(); await loop.close();}
-});
-
-for (const kind of ['player', 'whisper'] as const) test(`chat tools require addressed chat; ${kind} wakes and permits replies`, {timeout: 5000}, async t => {
-  const config = loadConfig(DEFAULT_CONFIG_PATH);
-  config.home = null;
-  const sent: string[] = [], results: unknown[] = [];
-  const bridge: Bridge = {
-    async health() {return true;},
-    async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-      if (method === 'qc.chat.send') sent.push(String(params.text));
-      const responses: Record<string, unknown> = {
-        'qc.control.state': {paused: false}, 'qc.chat.send': {sent: true},
-        'player.getState': {x: 0,y: 64,z: 0,health: 20,food: 20,dimension: 'minecraft:overworld'},
-        'player.getInventory': {hotbar: [], main: [], armor: [], offhand: {}}, 'player.getEquipment': {}, 'player.getStatusEffects': {effects: []},
-        'perception.entities': {entities: []}, 'perception.scan': {chunks: [], pois: []}, 'qc.world.state': {dimension: 'minecraft:overworld'},
-        'qc.baritone.status': {active: false}, 'session.info': {worldId: 'test', dimension: 'minecraft:overworld'},
-      };
-      return (responses[method] ?? {}) as T;
-    },
-  };
-  const events: Events = {on() {return () => {};}, async next() {return null;}};
-  const state: Notes = {home: null, zones: [], places: []};
-  const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
-  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  const sent: Array<{to: string | null; text: string; privately?: boolean}> = [];
   const chat: ChatPolicy = {
     route() {return {kind: 'ignore'};},
-    async say(text) {await bridge.rpc('qc.chat.send', {text}); return {ok: true, summary: 'sent'};},
-    async reply(to, text, privately) {
-      assert.equal(to, 'Rcon'); assert.equal(privately, true);
-      await bridge.rpc('qc.chat.send', {text: kind === 'whisper' ? `/msg ${to} ${text}` : `${to}: ${text}`}); return {ok: true, summary: 'sent'};
-    },
+    async say(text) {sent.push({to: null, text}); return {ok: true, summary: 'sent'};},
+    async reply(to, text, privately) {sent.push({to, text, privately}); return {ok: true, summary: 'sent'};},
   };
-  const afterRejected = Promise.withResolvers<void>(), afterAllowed = Promise.withResolvers<void>(), afterHistory = Promise.withResolvers<void>();
+  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  const records: Array<{kind: string; data: Record<string, unknown>}> = [], logs: string[] = [];
+  const requests: LaneRequest[] = [], waiters: Array<(request: LaneRequest) => void> = [], replies: Array<(reply: LlmReply) => void> = [];
   const cancelled = Promise.withResolvers<never>();
-  t.signal.addEventListener('abort', () => cancelled.reject(new Error('Reply-only chat regression cancelled')), {once: true});
-  let requests = 0;
-  const allowedRequest = kind === 'whisper' ? 5 : 4;
-  function propose(...names: Array<'chat_say' | 'chat_reply'>): LlmReply {
-    return {content: null, reasoning: null, usage: {}, toolCalls: names.map((name, i) => ({
-      id: `${requests}-${i}`, type: 'function', function: {name, arguments: JSON.stringify(name === 'chat_say' ? {text: 'Hello!'} : {to: 'Rcon', text: 'I am an AI agent.'})},
-    }))};
-  }
-  const loop = createLoop({config, bridge, events, notes, chat, heuristics, log(message) {
-    if (message.startsWith('Loop failure:')) cancelled.reject(new Error(message));
-  }, record(kind, data) {if (kind === 'tool_result') results.push(data.result);}, llm: {
-    async complete(messages) {
-      try {
-        const current = messages.findLast(message => message.role === 'user' && typeof message.content === 'string');
-        assert.ok(current && current.role === 'user' && typeof current.content === 'string');
-        const payload = JSON.parse(current.content) as {wakeSources: string[]; mustReply: unknown[]; observation: {recentChat: Array<{id: number}>}};
-        requests++;
-        if (requests === 1) {
-          assert.ok(payload.wakeSources.includes('instruction'));
-          assert.deepEqual(payload.observation.recentChat.map(event => event.id), [41, 40, 43]);
-          const prompt = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
-          assert.match(prompt, /Speak in chat only to answer messages in mustReply \(messages that mention SirWaffleshnoz or Jared, or whisper you\)/);
-          return propose('chat_say', 'chat_reply');
-        }
-        if (requests === 2) {loop.pause('inspect rejected chat'); afterRejected.resolve();}
-        if (requests === 3) {
-          assert.deepEqual(payload.wakeSources, ['chat']);
-          assert.equal(payload.observation.recentChat.length, 1); assert.equal(payload.mustReply.length, 1);
-          return kind === 'whisper' ? propose('chat_say') : propose('chat_say', 'chat_reply');
-        }
-        if (requests === 4 && kind === 'whisper') {
-          assert.deepEqual(payload.observation.recentChat, []); assert.equal(payload.mustReply.length, 1);
-          return propose('chat_reply');
-        }
-        if (requests === allowedRequest) {assert.deepEqual(payload.mustReply, []); loop.pause('inspect allowed chat'); afterAllowed.resolve();}
-        if (requests === allowedRequest + 1) return propose('chat_say');
-        if (requests === allowedRequest + 2) {loop.pause('inspect history'); afterHistory.resolve();}
-      } catch (error) {
-        cancelled.reject(error);
-      }
-      return {content: null, reasoning: null, toolCalls: [], usage: {}};
+  signal.addEventListener('abort', () => cancelled.reject(new Error('Chat regression cancelled')), {once: true});
+  let clock = 1000;
+  const loop = createLoop({config, bridge, events, notes, chat, heuristics, now: () => clock,
+    log(message) {logs.push(message);}, record(kind, data) {records.push({kind, data});},
+    llm: {async complete(messages, tools, opts) {
+      const reply = Promise.withResolvers<LlmReply>(); replies.push(reply.resolve);
+      const request: LaneRequest = {messages: [...messages], tools, thinking: opts.thinking, timeoutMs: opts.timeoutMs, answer: reply.resolve, fail: reply.reject};
+      const waiter = waiters.shift();
+      if (waiter) waiter(request); else requests.push(request);
+      return reply.promise;
+    }},
+  });
+  return {loop, notes, sent, records, logs, requests,
+    advance(ms: number) {clock += ms;},
+    async next() {
+      const queued = requests.shift(); if (queued) return queued;
+      const pending = Promise.withResolvers<LaneRequest>(); waiters.push(pending.resolve);
+      return Promise.race([pending.promise, cancelled.promise]);
     },
-  }});
-  const rejected = {ok: false, summary: "chat is only for replying to a message that mentions you"};
+    async close() {loop.pause('test finished'); replies.forEach(resolve => resolve({content: null, reasoning: null, toolCalls: [], usage: {}})); await loop.close();},
+  };
+}
+function lanePayload(request: LaneRequest): Record<string, unknown> {
+  const message = request.messages.find(message => message.role === 'user');
+  assert.ok(message && typeof message.content === 'string');
+  return JSON.parse(message.content) as Record<string, unknown>;
+}
+function laneReply(...calls: Array<{name: string; args: Record<string, unknown>}>): LlmReply {
+  return {content: null, reasoning: null, usage: {}, toolCalls: calls.map((call, i) => ({
+    id: `call-${i}`, type: 'function', function: {name: call.name, arguments: JSON.stringify(call.args)},
+  }))};
+}
+function incoming(id: number, extra: Partial<ChatEvent> = {}): ChatEvent {
+  return {id, kind: 'player', senderName: 'Alex', senderUuid: 'alex', text: 'Jared, how is it going?', self: false, signed: false, mentionsMe: true, ...extra};
+}
+async function waitFor(predicate: () => boolean) {
+  for (let i = 0; i < 100 && !predicate(); i++) await delay(5);
+  assert.ok(predicate(), 'expected asynchronous lane outcome');
+}
+
+test('chat replies independently while a body tool is blocked; lane histories and tools stay separate', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal), toolStarted = Promise.withResolvers<void>(), releaseTool = Promise.withResolvers<void>();
+  f.notes.update = async fn => {toolStarted.resolve(); await releaseTool.promise; fn(f.notes.get());};
   try {
-    loop.wake('chat', {id: 40, kind: 'player', senderUuid: 'other', senderName: 'Rcon', text: 'Anyone online?', signed: false, mentionsMe: false, self: false});
-    assert.deepEqual(loop.status().pendingWakes, []);
-    loop.resume();
-    loop.wake('chat', {id: 41, kind: 'player', senderUuid: 'self', senderName: 'SirWaffleshnoz', text: 'SirWaffleshnoz is here.', signed: false, mentionsMe: true, self: true});
-    loop.wake('chat', {id: 43, kind: 'player', senderUuid: 'other', senderName: 'Rcon', text: 'Still nobody?', signed: false, mentionsMe: false, self: false});
-    await delay(20);
-    assert.equal(requests, 0); assert.deepEqual(loop.status().pendingWakes, []);
-    loop.instruction('collect logs');
-    await Promise.race([afterRejected.promise, cancelled.promise]);
-    assert.deepEqual(results, [rejected, rejected]); assert.deepEqual(sent, []);
-    loop.wake('chat', {id: 42, kind, senderUuid: null, senderName: 'Rcon', text: kind === 'player' ? 'SirWaffleshnoz, are you an AI?' : 'Hello! Are you an AI?', signed: false, mentionsMe: kind === 'player', self: false});
-    loop.restore({instruction: null, goals: []}); loop.resume();
-    loop.restore({instruction: 'collect logs', goals: ['collect logs']});
-    await Promise.race([afterAllowed.promise, cancelled.promise]);
-    assert.deepEqual(results.slice(2), [{ok: true, summary: 'sent', observedDelta: {}}, {ok: true, summary: 'sent', observedDelta: {}}]);
-    assert.deepEqual(sent, ['Hello!', kind === 'whisper' ? '/msg Rcon I am an AI agent.' : 'Rcon: I am an AI agent.']);
-    loop.wake('instruction'); loop.resume();
-    await Promise.race([afterHistory.promise, cancelled.promise]);
-    assert.deepEqual(results.at(-1), rejected); assert.equal(sent.length, 2);
-  } finally {await loop.close();}
+    f.loop.instruction('remember this place'); f.loop.resume();
+    const body = await f.next();
+    assert.ok(body.tools.every(tool => !['chat_say', 'chat_reply'].includes(tool.name)));
+    assert.equal('mustReply' in lanePayload(body), false);
+    body.answer(laneReply({name: 'remember', args: {kind: 'landmark', name: 'Here', note: 'A place.'}}));
+    await toolStarted.promise;
+    f.loop.wake('chat', incoming(1));
+    const first = await f.next();
+    assert.equal(first.messages.length, 2); assert.equal(first.thinking, false); assert.equal(first.timeoutMs, 30000);
+    assert.deepEqual(first.tools.map(tool => tool.name).sort(), ['chat_reply', 'chat_say', 'harness_info', 'observe']);
+    assert.deepEqual(lanePayload(first).mustReply, [{id: 1, from: 'Alex', kind: 'player', text: 'Jared, how is it going?'}]);
+    assert.equal((lanePayload(first).live as Record<string, unknown>).currentAction, 'remember');
+    first.answer(laneReply({name: 'harness_info', args: {question: 'What agent am I?'}}));
+    const second = await f.next(); assert.ok(second.messages.some(message => message.role === 'tool'));
+    second.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'I am remembering a place.'}}));
+    await waitFor(() => f.sent.length === 1 && !f.loop.status().chatModel);
+    assert.equal(f.loop.status().skill, 'remember');
+    releaseTool.resolve();
+    const continuedBody = await f.next();
+    assert.ok(continuedBody.tools.every(tool => !['chat_say', 'chat_reply'].includes(tool.name)));
+    assert.ok(!continuedBody.messages.some(message => message.role === 'assistant' && message.tool_calls?.some(call => call.function.name === 'chat_reply')));
+    f.loop.pause('inspect body history'); continuedBody.answer(laneReply());
+  } finally {releaseTool.resolve(); await f.close();}
+});
+
+for (const kind of ['player', 'whisper'] as const) test(`${kind} replies open a case-insensitive five-minute conversation window`, {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.wake('chat', incoming(1, {kind, mentionsMe: kind === 'player'})); f.loop.resume();
+    const first = await f.next();
+    first.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Hello!'}}));
+    await waitFor(() => f.sent.length === 1 && !f.loop.status().chatModel);
+    assert.equal(f.sent[0]?.privately, true);
+    f.advance(300000);
+    f.loop.wake('chat', incoming(2, {senderName: 'aLeX', text: 'And how does that work?', mentionsMe: false}));
+    const followUp = await f.next();
+    assert.deepEqual(lanePayload(followUp).mustReply, []);
+    assert.deepEqual(lanePayload(followUp).followUps, [{id: 2, from: 'aLeX', kind: 'player', text: 'And how does that work?'}]);
+    followUp.answer(laneReply({name: 'chat_say', args: {text: 'Here is how it works.'}}));
+    await waitFor(() => f.sent.length === 2 && !f.loop.status().chatModel);
+    f.advance(300001);
+    f.loop.wake('chat', incoming(3, {text: 'And now?', mentionsMe: false}));
+    await delay(20); assert.equal(f.requests.length, 0); assert.equal(f.sent.length, 2);
+    assert.deepEqual(f.loop.status().pendingWakes, []);
+  } finally {await f.close();}
+});
+
+test('history, self and system chat never wake a reply or body turn; history remains context', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.wake('chat history', incoming(1)); f.loop.wake('chat history', incoming(2, {kind: 'whisper'}));
+    f.loop.wake('chat', incoming(3, {self: true})); f.loop.wake('chat', incoming(4, {kind: 'system'}));
+    f.loop.resume(); await delay(20);
+    assert.equal(f.requests.length, 0); assert.deepEqual(f.loop.status().pendingWakes, []);
+    f.loop.wake('chat', incoming(5)); const live = await f.next();
+    assert.deepEqual(lanePayload(live).mustReply, [{id: 5, from: 'Alex', kind: 'player', text: 'Jared, how is it going?'}]);
+    assert.deepEqual((lanePayload(live).recentChat as Array<{id: number}>).map(event => event.id), [1, 2, 3, 4, 5]);
+    live.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Hello!'}}));
+    await waitFor(() => f.sent.length === 1);
+  } finally {await f.close();}
+});
+
+test('chat tools are rejected outside addressed chat, including after a lane has answered its entries', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  const rejected = {ok: false, summary: 'chat is only for replying to a message that mentions you'};
+  try {
+    f.loop.instruction('do not send unsolicited chat'); f.loop.resume();
+    const body = await f.next();
+    body.answer(laneReply({name: 'chat_say', args: {text: 'Unsolicited.'}}, {name: 'chat_reply', args: {to: 'Alex', text: 'Unsolicited.'}}));
+    const bodyAgain = await f.next(); f.loop.pause('body rejection inspected'); bodyAgain.answer(laneReply());
+    assert.deepEqual(f.records.filter(record => record.kind === 'tool_result').map(record => record.data.result), [rejected, rejected]);
+    assert.deepEqual(f.sent, []);
+    f.loop.restore({instruction: null, goals: []});
+    f.loop.wake('chat', incoming(1)); f.loop.resume();
+    const request = await f.next();
+    request.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Hello!'}}, {name: 'chat_say', args: {text: 'Unsolicited extra.'}}));
+    await waitFor(() => !f.loop.status().chatModel);
+    assert.equal(f.sent.length, 1);
+    assert.deepEqual(f.records.filter(record => record.kind === 'tool_result').at(-1)?.data.result, rejected);
+  } finally {await f.close();}
+});
+
+test('new addressed entries rerun immediately with at most one chat request in flight', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.resume(); f.loop.wake('chat', incoming(1)); const first = await f.next();
+    f.loop.wake('chat', incoming(2, {senderName: 'Sam'})); await delay(20);
+    assert.equal(f.requests.length, 0);
+    first.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Hello Alex!'}}));
+    const second = await f.next();
+    assert.deepEqual(lanePayload(second).mustReply, [{id: 2, from: 'Sam', kind: 'player', text: 'Jared, how is it going?'}]);
+    assert.equal(second.messages.length, 2);
+    second.answer(laneReply({name: 'chat_reply', args: {to: 'Sam', text: 'Hello Sam!'}}));
+    await waitFor(() => f.sent.length === 2 && !f.loop.status().chatModel);
+  } finally {await f.close();}
+});
+
+test('mustReply retries twice at five-second intervals with a nudge, then logs the dropped entry', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.resume(); f.loop.wake('chat', incoming(1));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const request = await f.next();
+      assert.equal(lanePayload(request).nudge, attempt ? 'You did not answer these mustReply entries; answer them now.' : undefined);
+      request.answer(laneReply()); await waitFor(() => !f.loop.status().chatModel);
+      if (attempt < 2) {
+        f.advance(4999); f.loop.wake('chat'); await delay(10); assert.equal(f.requests.length, 0);
+        f.advance(1); f.loop.wake('chat');
+      }
+    }
+    assert.ok(f.logs.includes('Unanswered chat dropped: Alex: Jared, how is it going?'));
+    f.advance(5000); f.loop.wake('chat'); await delay(10); assert.equal(f.requests.length, 0);
+  } finally {await f.close();}
+});
+
+test('paused mustReply expires at 120 seconds and follow-ups expire with their conversation window', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.wake('chat', incoming(1)); f.advance(120000); f.loop.resume(); await delay(20);
+    assert.equal(f.requests.length, 0);
+    f.loop.wake('chat', incoming(2)); (await f.next()).answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Hello!'}}));
+    await waitFor(() => f.sent.length === 1 && !f.loop.status().chatModel);
+    f.loop.pause('manual input'); f.loop.wake('chat', incoming(3, {mentionsMe: false}));
+    await delay(10); assert.equal(f.requests.length, 0);
+    f.advance(300001); f.loop.resume(); await delay(20); assert.equal(f.requests.length, 0);
+  } finally {await f.close();}
+});
+
+test('a chat lane allows at most three tool rounds and never dispatches gameplay', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.resume(); f.loop.wake('chat', incoming(1));
+    for (let round = 0; round < 3; round++) {
+      const request = await f.next();
+      assert.equal(request.messages.filter(message => message.role === 'system').length, 1);
+      assert.equal(request.messages.filter(message => message.role === 'tool').length, round);
+      request.answer(laneReply({name: 'go_to', args: {x: 1, z: 1}}));
+    }
+    await waitFor(() => !f.loop.status().chatModel);
+    assert.equal(f.requests.length, 0); assert.equal(f.loop.status().skill, null); assert.equal(f.sent.length, 0);
+    assert.deepEqual(f.records.filter(record => record.kind === 'tool_result').map(record => record.data.result),
+      Array.from({length: 3}, () => ({ok: false, summary: 'Chat is conversation only; gameplay requires the local terminal'})));
+  } finally {await f.close();}
+});
+
+test('an LLM failure retries addressed chat without waiting on the body lane', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.resume(); f.loop.wake('chat', incoming(1)); (await f.next()).fail(new Error('request timed out'));
+    await waitFor(() => !f.loop.status().chatModel);
+    assert.ok(f.logs.includes('Chat lane failure: request timed out'));
+    f.advance(5000); f.loop.wake('chat'); const retry = await f.next();
+    assert.equal(lanePayload(retry).nudge, 'You did not answer these mustReply entries; answer them now.');
+    retry.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Sorry, here is my answer.'}}));
+    await waitFor(() => f.sent.length === 1 && !f.loop.status().chatModel);
+  } finally {await f.close();}
+});
+
+test('expired addressed entries cannot authorize a stale lane chat tool', {timeout: 5000}, async t => {
+  const f = chatLoopFixture(t.signal);
+  try {
+    f.loop.resume(); f.loop.wake('chat', incoming(1)); const stale = await f.next();
+    f.advance(120000);
+    stale.answer(laneReply({name: 'chat_reply', args: {to: 'Alex', text: 'Too late.'}}));
+    await waitFor(() => !f.loop.status().chatModel);
+    assert.deepEqual(f.sent, []);
+    assert.deepEqual(f.records.filter(record => record.kind === 'tool_result').at(-1)?.data.result,
+      {ok: false, summary: 'chat is only for replying to a message that mentions you'});
+  } finally {await f.close();}
 });
 
 test('console stop wins while resume is waiting for its lease RPC', async () => {
@@ -471,9 +560,8 @@ test('thinking is limited to new console instructions and their failed-tool repl
     loop.wake('instruction tool failure'); loop.resume(); instructionPlanning.answer(plain);
     (await expectRequest('resume', false)).answer(plain);
     const resumedPlanning = await expectRequest('continue', false);
-    loop.pause('chat gate test'); loop.restore({instruction: null, goals: []});
+    loop.pause('chat no longer wakes body'); loop.restore({instruction: null, goals: []});
     config.home = null; state.home = null; loop.wake('chat'); loop.resume(); resumedPlanning.answer(plain);
-    (await expectRequest('chat', false)).answer(failedTool('chat-goto'));
     loop.instruction('remember this place');
     (await expectRequest('instruction', true)).answer({content: null, reasoning: null, toolCalls: [{id: 'successful-note', type: 'function', function: {name: 'remember', arguments: '{"kind":"landmark","name":"Here","note":"A place to revisit."}'}}], usage: {}});
     (await expectRequest('tool completion', false)).answer(plain);

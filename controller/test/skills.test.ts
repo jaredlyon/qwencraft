@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TOOLS, toolsForLlm, validateArguments } from "../tools.ts";
-import { MAX_PATH_FAILURES, blocksForItem, chooseRecipe, dropForBlock, executeSkill, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId } from "../skills.ts";
+import { MAX_PATH_FAILURES, blocksForItem, chooseRecipe, dropForBlock, executeSkill, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId, oreHeight } from "../skills.ts";
 import type { Config, GameEvent, Notes, SkillEnv } from "../types.ts";
 
 const expected = "observe look_screenshot go_to go_to_player follow_player explore collect mine craft smelt place_block break_block equip eat attack chest_deposit chest_withdraw drop chat_say chat_reply run_command remember recall set_goal finish_goal stop harness_info".split(" ");
@@ -225,19 +225,24 @@ test("a job that Baritone keeps retrying ends after repeated path failures inste
   assert.equal(stopped, true);
 });
 
-function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; moving?: boolean; acquireAt?: number; count?: number} = {}) {
-  let now = 0, stopped = false, started = false, scanned = false;
+function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; moving?: boolean; acquireAt?: number; count?: number; startY?: number} = {}) {
+  let now = 0, stopped = false, started = false, scanned = false, descended = false;
+  const calls: Array<{method: string; params: unknown}> = [];
+  const branchY = oreHeight(itemId(options.block ?? "iron_ore")) ?? 64;
   const unused = (): never => {throw new Error("unexpected test dependency");};
   const env: SkillEnv = {
-    bridge: {health: async () => true, async rpc<T>(method: string): Promise<T> {
+    bridge: {health: async () => true, async rpc<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+      calls.push({method, params});
       if (method === "perception.scan" || method === "perception.blocks") {scanned = true; throw new Error("ore scan must not be required");}
-      if (method === "qc.baritone.mine") started = true;
+      if (method === "qc.baritone.mine") {started = true; stopped = false;}
+      if (method === "qc.baritone.goto") {descended = true; stopped = false;}
       if (method === "qc.baritone.stop") stopped = true;
       const responses: Record<string, unknown> = {
-        "player.getState": {x: options.moving ? now / 30000 : 0, y: 64, z: 0, dimension: "minecraft:overworld"},
+        "player.getState": {x: options.moving ? now / 30000 : 0, y: descended ? branchY : options.startY ?? branchY, z: 0, dimension: "minecraft:overworld"},
+        "qc.baritone.goto": {started: true, taskId: "down-task"},
         "player.getInventory": {selectedSlot: 0, hotbar: [{id: `minecraft:${pickaxe}_pickaxe`, count: 1, slot: 0},
           ...(now >= (options.acquireAt ?? Infinity) ? [{id: dropForBlock(options.block ?? "iron_ore"), count: options.count ?? 1, slot: 1}] : [])], main: [], armor: [], offhand: {}},
-        "qc.baritone.mine": {started: true, taskId: "ore-task"}, "qc.baritone.status": {active: started && !stopped, taskId: "ore-task"},
+        "qc.baritone.mine": {started: true, taskId: "ore-task"}, "qc.baritone.status": {active: (started || descended) && !stopped, taskId: started ? "ore-task" : "down-task"},
         "qc.baritone.stop": {stopped: true},
       };
       return (responses[method] ?? {}) as T;
@@ -247,7 +252,7 @@ function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; movi
     events: {on() {return () => {};}, async next() {now += options.stepMs ?? 45000; return null;}},
     chat: {route: unused, say: unused, reply: unused}, signal: new AbortController().signal, log() {},
   };
-  return {env, now: () => now, state: () => ({stopped, started, scanned})};
+  return {env, now: () => now, calls, state: () => ({stopped, started, scanned})};
 }
 
 test("ore mining needs a sufficient pickaxe but no nearby scanned ore", async () => {
@@ -274,6 +279,19 @@ test("a mining job with no position or target-inventory progress stops after 45 
   assert.equal(answer.ok, false);
   assert.equal(answer.summary, "stalled: no movement or inventory change for 45 s");
   assert.equal(job.now(), 45000); assert.equal(job.state().stopped, true);
+});
+
+test("ore mining digs down to the ore's height first, then branch-mines at that height", async () => {
+  assert.equal(oreHeight("minecraft:deepslate_iron_ore"), 16);
+  assert.equal(oreHeight("minecraft:emerald_ore"), undefined);
+  const job = oreJob("stone", {acquireAt: 45000, startY: 64});
+  const answer = await executeSkill("mine", {block: "iron_ore", count: 1}, job.env, job.now);
+  assert.equal(answer.ok, true, answer.summary);
+  const goto = job.calls.findIndex(c => c.method === "qc.baritone.goto");
+  const mine = job.calls.findIndex(c => c.method === "qc.baritone.mine");
+  assert.ok(goto >= 0 && mine > goto);
+  assert.deepEqual(job.calls[goto]!.params, {x: 0, y: 16, z: 0});
+  assert.equal((job.calls[mine]!.params as {y?: number}).y, 16);
 });
 
 test("ore budgets use the five-minute floor, forty seconds per item and fifteen-minute ceiling", async () => {

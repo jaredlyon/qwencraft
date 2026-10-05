@@ -65,6 +65,10 @@ async function main() {
   const events = createEvents(bridge, config, lifetime.signal);
   const bootEvents: GameEvent[] = [];
   const offBootstrap = events.on('*', event => {bootEvents.push(event);});
+  const startupEvents = await bridge.rpc<{lastId: number}>('events.getRecent', {limit: 1}, {signal: lifetime.signal});
+  if (!Number.isSafeInteger(startupEvents.lastId) || startupEvents.lastId < 0) throw new Error('Invalid startup event watermark');
+  const startupLastId = startupEvents.lastId;
+  let graceUntil = 0;
   const heuristics = await createHeuristics(config.paths.heuristicsDir, log);
   const notes = await createNotesStore(config.paths.notesFile, config);
   const context = (): Ctx => ({config: config as unknown as Record<string, unknown>, notes: notes.get() as unknown as Record<string, unknown>, log, now: Date.now});
@@ -224,9 +228,10 @@ async function main() {
       case 'qc.chat': {
         if (!['player','system','whisper'].includes(String(payload.kind)) || typeof payload.text !== 'string' || typeof payload.self !== 'boolean' || typeof payload.mentionsMe !== 'boolean' || typeof payload.signed !== 'boolean') return;
         const message: ChatEvent = {id: event.id, kind: payload.kind as ChatEvent['kind'], senderUuid: typeof payload.senderUuid === 'string' ? payload.senderUuid : null, senderName: typeof payload.senderName === 'string' ? payload.senderName : null, text: payload.text, self: payload.self, mentionsMe: payload.mentionsMe, signed: payload.signed};
+        if (event.id <= startupLastId || Date.now() < graceUntil) {loop.wake('chat history', message); break;}
         const route = chat.route(message);
-        if (route.kind === 'model') loop.wake('chat', message);
-        else if (route.kind === 'reply') void chat.say(route.text).catch(handleError);
+        if (route.kind === 'model') loop.wake('chat', {...message, mentionsMe: message.kind !== 'system' && route.mustConsider});
+        else if (route.kind === 'reply') loop.wake('chat', {...message, mentionsMe: true});
         break;
       }
       case 'qc.pause':
@@ -261,6 +266,7 @@ async function main() {
         else void reconnect();
         break;
       case 'qc.join':
+        graceUntil = Date.now() + 5000;
         void (async () => {
           if (payload.host !== config.server.host || payload.port !== config.server.port) {await stop(); log('Unexpected server join; controller paused'); return;}
           await verifySession(); connected = true; stability(); await pushConfig(); await activate();

@@ -83,7 +83,9 @@ export async function observe(env: SkillEnv, extra: { goal: string | null; lastR
       const item = record(stack);
       if (typeof item.id === "string" && typeof item.count === "number" && Number.isFinite(item.count)) counts[item.id] = (counts[item.id] ?? 0) + item.count;
     }
-    values.inventory = { counts, selectedSlot: inv.selectedSlot, hotbar: inv.hotbar, armor: inv.armor, offhand: inv.offhand, equipment: values.equipment };
+    // player.getInventory omits empty slots, so free storage = 36 hotbar+main slots minus the stacks listed.
+    const stored = (Array.isArray(inv.hotbar) ? inv.hotbar.length : 0) + (Array.isArray(inv.main) ? inv.main.length : 0);
+    values.inventory = { counts, freeSlots: Math.max(0, 36 - stored), selectedSlot: inv.selectedSlot, hotbar: inv.hotbar, armor: inv.armor, offhand: inv.offhand, equipment: values.equipment };
   }
   delete values.equipment;
   const notes = env.notes.get();

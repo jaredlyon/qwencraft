@@ -82,7 +82,8 @@ export function createChatPolicy(c: Config, b: Bridge, h: HeuristicsHost, ctx: (
       const namedSelf = e.senderUuid === null && ownName !== undefined && e.senderName?.toLowerCase() === ownName;
       const renderedSelf = e.senderUuid === null && ownName !== undefined && e.kind === "system" && (e.text.toLowerCase().startsWith(`<${ownName}> `) || e.text.toLowerCase().startsWith(`${ownName}: `)) && echoes.some(text => e.text.endsWith(text));
       if (e.self || namedSelf || renderedSelf) return { kind: "ignore" };
-      if (e.kind !== "system" && e.senderName !== null && /^[A-Za-z0-9_]{1,16}$/.test(e.senderName)) recipients.set(e.senderName.toLowerCase(), e.kind);
+      if (e.kind === "system") return { kind: "model", mustConsider: false };
+      if (e.senderName !== null && /^[A-Za-z0-9_]{1,16}$/.test(e.senderName)) recipients.set(e.senderName.toLowerCase(), e.kind);
       const lower = e.text.toLowerCase();
       const mentioned = c.chat.nicknames.some(name => lower.includes(name.toLowerCase())) || c.chat.wholeWords.some(word => new RegExp(`(?<![\\p{Alphabetic}\\p{Nd}\\p{M}\\p{Pc}\\u200C\\u200D])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{Alphabetic}\\p{Nd}\\p{M}\\p{Pc}\\u200C\\u200D])`, "iu").test(e.text));
       const mustConsider = e.mentionsMe || mentioned || e.kind === "whisper";

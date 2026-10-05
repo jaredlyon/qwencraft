@@ -2,12 +2,12 @@
 
 ## 1. Objective and scope
 
-Phase 1 gives the local Qwen model a guarded body in the user's visible Minecraft client: the tower terminal supplies instructions, the controller plans and executes verified skills, and the client retains RayCraft chat as context while replying only to incoming non-self addressed messages (username substring, whole-word Jared, or any whisper). The operator watches. [D-00] [D-01] [D-02] [D-03] [D-05] [D-48]
+Phase 1 gives the local Qwen model a guarded body in the user's visible Minecraft client: the tower terminal supplies instructions, the controller executes verified skills in a body lane, and a parallel chat lane answers incoming non-self player mentions, whispers and eligible five-minute conversation follow-ups. System lines and replayed history are context only. The operator watches. [D-00, D-01, D-02, D-03, D-05, D-48, D-54, D-55, D-56, D-57]
 
 | In scope | Boundary / non-goal | Decisions |
 |---|---|---|
 | Visible `SirWaffleshnoz` client, Fabric companion mod, Baritone navigation | No second account, headless replacement client, or server-side control deployment | [D-01] [D-08] |
-| Console tasks, addressed chat Q&A, AI explanation when asked, idle survival progression | Other players can ask addressed questions, not issue action instructions; agent chat replies require the account username, whole-word Jared, or a whisper | [D-05] [D-16] [D-17] [D-19] [D-31] [D-47] [D-48] |
+| Console tasks, addressed chat Q&A and five-minute follow-ups, AI explanation when asked, idle survival progression | Other players can ask questions, not issue action instructions; the separate chat lane has no gameplay tools, and the body lane has no chat tools | [D-05, D-16, D-17, D-19, D-31, D-47, D-48, D-54, D-55] |
 | Curated skills, hot-reloaded `heuristics/*.ts`, JSON notes | No model-generated executable code or general plugin framework | [D-09] [D-25] [D-33] |
 | Four stop controls, action-path guards, bounded session recovery | No guarantee of third-party server permission or anti-cheat acceptance | [D-02] [D-10] [D-11] [D-24] [D-34] |
 | Phase-1 harness documentation | Blueprint/house architecture is deferred, not a hidden dependency of this harness | [D-00] |
@@ -40,8 +40,10 @@ flowchart LR
     T["tower terminal"] --> S["Supervisor (main.ts, tower)"]
     S -->|"launch / restart exit 75"| C["Controller (run.ts, tower)"]
     H["heuristics/*.ts"] --> C
-    C -->|"http://192.168.100.2:8000/v1"| V["vLLM on DGX Spark: qwen3.8-flash-next"]
-    V --> C
+    C --> Body["Body lane: gameplay, single-flight"]
+    C --> Chat["Chat lane: conversation, single-flight"]
+    Body <-->|"planning / tool results"| V["vLLM on DGX Spark: qwen3.8-flash-next"]
+    Chat <-->|"thinking off, 30 s"| V
     subgraph M["Minecraft client: fabric-loader-26.3"]
         F["Fabric API 0.161.0+26.3"]
         B["MCPFabric bridge: 127.0.0.1:25599"]
@@ -62,8 +64,8 @@ flowchart LR
 | Tower terminal → controller | Local terminal I/O; no listening port. [D-05] | `<free text>` and the console commands; only instruction authority. [D-05] [D-20] |
 | Controller → MCPFabric bridge | `http://127.0.0.1:25599/health`, HTTP GET; unauthenticated health endpoint. [D-07] [HTTP health handler](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/bridge/HttpBridgeServer.java#L78-L83) | Connectivity check, not evidence of being joined to RayCraft. [D-07] [VERIFY] Check joined state separately. |
 | Controller → MCPFabric bridge | `http://127.0.0.1:25599/rpc`, HTTP POST, bearer token from `config/mcpfabric.config.json`. [config](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/config/McpConfig.java#L13-L76) [HTTP bridge](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/bridge/HttpBridgeServer.java#L92-L134) | `{method,params}` → `{ok:true,result}` or `{ok:false,error:{code,message,data?}}`; not a JSON-RPC 2.0 envelope. [HTTP bridge](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/bridge/HttpBridgeServer.java#L92-L134) [envelope helpers](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/bridge/Json.java#L30-L47) |
-| Bridge → controller | `http://127.0.0.1:25599/events`, authenticated SSE. [D-07] [HTTP event handler](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/bridge/HttpBridgeServer.java#L131-L163) | Consume `qc.*` events; catch up through `events.getRecent{sinceId}` within the 2,000-event ring. [D-07] [D-14] [catch-up handler](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/handlers/ChatHandlers.java#L31-L38) [event ring](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/events/EventBus.java#L18-L68) |
-| Controller → vLLM | `http://192.168.100.2:8000/v1/chat/completions`, HTTP POST, model `qwen3.8-flash-next`. [probe](evidence/vllm-capability-probe.json.txt) | One request in flight; tool proposals are not direct client-control authority. [D-09] [D-20] |
+| Bridge → controller | `http://127.0.0.1:25599/events`, authenticated SSE. [D-07] [HTTP event handler](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/bridge/HttpBridgeServer.java#L131-L163) | Consume `qc.*`; catch up with `events.getRecent{sinceId}` in the 2,000-event ring. Startup chat at/below the captured current ID and chat processed in the five seconds after each join route as history context only, never replies. [D-07, D-14, D-57] |
+| Controller → vLLM | `http://192.168.100.2:8000/v1/chat/completions`, HTTP POST, model `qwen3.8-flash-next`. [probe](evidence/vllm-capability-probe.json.txt) | Single-flight per lane: one body request and one chat request may be in flight together. Only the body lane has gameplay authority. [D-09, D-20, D-55] |
 | Minecraft client → RayCraft | `raycraft.ddnsfree.com:25565`, Minecraft connection; TCP status probe used protocol `777`. [connection log](evidence/client-latest-log-connect.txt) [status ping](evidence/raycraft-status-ping.json.txt) | Client remains the account/session boundary; no direct controller-to-server action channel. [D-01] [D-02] |
 | Controller → heuristics | Local `heuristics/*.ts` imports and file-change hot reload; no port. [D-25] | Trusted user-authored hooks; all resulting actions still pass hard guards. [D-10] [D-25] |
 
@@ -75,7 +77,8 @@ Use three timescales: Qwen chooses goals/tools, controller skills drive bounded 
 
 | Layer | Granularity | Responsibility / authority |
 |---|---|---|
-| Qwen planner | [INFERENCE] Seconds per turn, not a gameplay latency guarantee; completion, failure, instruction, incoming non-self addressed chat, or immediate `continue`. Non-addressed chat does not wake it. [D-48, D-19, D-20, D-51] | 27 curated tools; thinking only for a new console instruction or failed-tool replan on that instruction. [D-09, D-21, D-46, D-51] |
+| Qwen body planner | [INFERENCE] Seconds per turn, not a gameplay latency guarantee; completion, failure, instruction, or immediate `continue`. Chat never wakes this lane. [D-19, D-20, D-51, D-55] | Registry minus `chat_say`/`chat_reply`; thinking only for a new console instruction or failed-tool replan on that instruction. [D-09, D-21, D-46, D-55] |
+| Qwen chat lane | Pending player mentions/whispers and eligible follow-ups run independently of body tools, at most one chat turn at a time. System/history lines are context only. [D-54, D-55, D-56, D-57] | `chat_say`, `chat_reply`, `harness_info`, `observe` only; thinking off, 30-second request deadline, up to three tool rounds. [D-55] |
 | Controller skills | Seconds–minutes per task, not model-selected per-tick keypresses. [D-07] [D-09] [INFERENCE] Duration depends on terrain/resources. | Execute one body workflow; verify inventory/block/position postconditions before `{ok,summary,observedDelta}`. [D-09] |
 | Java reflexes in `qwencraft` | Nominal 20 Hz / 50 ms checks; no model/network dependency. [D-32] | Priority escape lava/fire/drowning > flee_creeper > retaliate against damaging hostile > eat at food ≤14 when edible food exists. Creeper flee triggers within 5 blocks if fusing/approaching, sprints away until ≥8 blocks/gone/5 seconds, then releases keys. [D-32, D-52] |
 | User heuristics | `onObservation`, `onPlanProposed`, `onChat`; nonblocking `onTick` at approximately 5–10 Hz. [D-25] [D-32] | Hints, veto/rewrite, chat decisions, guarded preempting intents; never disabling pause/protect/chat/allowlist enforcement. [D-10] [D-25] |
@@ -91,21 +94,26 @@ When `home=null`, send the allowlisted `/home` once, wait for arrival, record th
 | Wake event | Loop treatment | Decisions |
 |---|---|---|
 | New console instruction | Increment generation, cancel active work, re-observe, replan; reject old-generation results before any dispatch/report | [D-05] [D-20] |
-| `qc.chat` | Incoming non-self `player` messages with authoritative `mentionsMe=true`, or any incoming non-self whisper, wake conversation; non-addressed lines remain observation `recentChat` context for the next turn without waking the model. Chat never supplies action authority | [D-14] [D-48] [D-17] |
+| `qc.chat` | Preserve context. Fresh incoming non-self player mentions or whispers enter chat-lane `mustReply`; messages from a sender replied to within five minutes enter `followUps` without needing a name. Others, system lines and history are context only. Never wakes the body or supplies gameplay authority | [D-14, D-48, D-54, D-55, D-56, D-57, D-17] |
 | `qc.task` / skill completion or failure | Mod event states are only `at_goal`/`calc_failed`/`canceled`/`lost_control`; controller verifies actual state and alone declares done/failed, appends `{ok,summary,observedDelta}`, then continues or replans | [D-09] [D-20] [D-42] |
 | `qc.death` / respawn | Invalidate current work, auto-respawn, re-observe location/inventory before further work | [D-20] [D-24] |
-| `continue` | After a current/unpaused no-tool reply or completed chat-only turn, immediately replan if instruction or home exists; remaining unanswered chat queues `chat` instead. With home but no instruction, progress tools → food → iron → shelter/bed within the horizontal radius. Neither instruction nor home means `Idle` (nothing to do). | [D-51, D-19, D-31, D-37, D-39, D-40] |
+| `continue` | After a current/unpaused no-tool body reply, immediately replan if instruction or home exists; conversation proceeds independently. With home but no instruction, progress tools → food → iron → shelter/bed within the horizontal radius. Neither instruction nor home means the body is `Idle`. | [D-51, D-55, D-19, D-31, D-37, D-39, D-40] |
 
-Single-flight applies to model requests, while one owned skill controls the body; multiple proposed tools execute sequentially after heuristic validation and guards. [D-09] [D-20] A new instruction invalidates the previous generation immediately; abort the old request where possible, but do not depend on remote cancellation—discard a late response and dispatch nothing from it. [D-20] [INFERENCE] These generation/cancellation mechanics adapt Mindcraft's cooperative interruption pattern without inheriting its ordinary-chat action policy. [Mindcraft action manager](https://github.com/mindcraft-bots/mindcraft/blob/f6a9556cf756e6bd88a75cc2fa0d5aed7599b101/src/agent/action_manager.js#L26-L112) [D-05] [D-20]
+Single-flight applies **within each of two lanes**, including locally settling canceled requests; one body and one chat request may overlap. One owned skill controls the body, and proposed tool batches execute sequentially within their lane after validation and guards. The chat lane cannot dispatch gameplay, and the body lane cannot dispatch chat tools. [D-09, D-20, D-55] A new instruction invalidates the previous generation immediately; abort where possible, but discard late stale responses rather than relying on remote cancellation. [D-20] [INFERENCE] These cancellation mechanics adapt Mindcraft's cooperative interruption pattern without inheriting ordinary-chat action authority. [Mindcraft action manager](https://github.com/mindcraft-bots/mindcraft/blob/f6a9556cf756e6bd88a75cc2fa0d5aed7599b101/src/agent/action_manager.js#L26-L112)
 
 Each action runs through completion inside its tool call. Interrupted, obsolete-generation and no-dispatch results mean the task stopped; reissue a needed action rather than assuming background work. A no-tool reply on `continue` receives the next-action/finish-goal nudge. There is no deliberate delay between actionable turns. Ore-only mining exposes real ore through legit branch-mining at the selected mineral Y; non-ore collection still scans loaded chunks. [D-50, D-51] [Mining levels](20-companion-mod.md#9-protection-and-baritone-settings) [Loop policy](30-controller.md#6-loop-cancellation-and-self-goals)
 
-This successful `go_to` example shows console instruction → planning → guarded tool → observed verification → controller-owned completion → report; each proposed call is checked against the current generation before dispatch, and the lease heartbeat runs independently throughout. [D-09] [D-11] [D-20] [D-25] [D-42]
+The chat lane receives `{mustReply,followUps,recentChat,live}`: up to 30 recent chat events as context, and live goal, instruction, current skill, image-free last result and quick `player.getState` position/health. It reuses identity/safety/chat prompt rules in its own message list, never body history. Successful replies restart each answered sender's five-minute window (case-insensitive names) and clear answered entries; newly queued entries run next immediately. Any pause blocks the lane; addressed entries retain their 120-second expiry and follow-ups expire with the window. [D-54, D-55] [Detailed lane contract](30-controller.md#6-loop-cancellation-and-self-goals)
+
+After setting up SSE, startup reads the highest current event ID once with `events.getRecent {limit:1}`; chat at/below it is history. Each `qc.join` opens a five-second processing-time grace. Both route as `loop.wake('chat history', message)`, without reply routing or lane wakes. Non-whisper GAME text matching `^Discord \u2022 (\S+) \u00bb (.*)$` is player chat from group 1 with null UUID, unsigned, unchanged text and nickname matching against group 2. Remaining system lines have `mentionsMe=false`; advancements, joins and deaths are never reply invitations. [D-56, D-57]
+
+This `go_to` contract example shows body planning → guarded tool → observed verification → controller-owned completion, with a parallel chat reply before arrival. It illustrates scheduling, not a newly observed live pass. Each call is checked against current generation/pause state, and the lease heartbeat runs independently. [D-09, D-11, D-20, D-25, D-42, D-55]
 
 ```mermaid
 sequenceDiagram
     participant T as tower terminal
-    participant C as Controller (Node, tower)
+    participant C as Body lane (Node, tower)
+    participant H as Chat lane (Node, tower)
     participant V as vLLM on DGX Spark
     participant B as MCPFabric bridge
     participant Q as qwencraft
@@ -120,6 +128,13 @@ sequenceDiagram
     B->>Q: qc.baritone.goto {x,y,z,range}
     Q-->>B: {started:true,taskId}
     B-->>C: {ok:true,result}
+    Note over C,Q: Navigation continues while conversation runs
+    Q-->>B: qc.chat (fresh player mention)
+    B-->>H: mustReply + recentChat + live
+    H->>V: conversation request (thinking off)
+    V-->>H: chat_reply(to,text)
+    H->>B: /rpc: qc.chat.send
+    B->>Q: guarded reply (body still navigating)
     Q-->>B: qc.task {taskId,kind,state:"at_goal"}
     B-->>C: /events: qc.task
     C->>C: observe
@@ -147,7 +162,7 @@ The probe comprised exactly five sequential small requests, totaling 137 complet
 | Bridge dispatch | `callTimeoutMs=8000`. [config](https://github.com/Etoryx/mcpfabric/blob/990490791a0a38273ce28c0b15f2e90448347e2d/src/main/java/dev/mcpfabric/config/McpConfig.java#L13-L76) | RPC acknowledgement timeout is not an eight-second navigation/mining task limit. [D-08] [D-09] |
 | Acquisition/job progress | Ore `mine`/`collect` (any target id ending `_ore`): `min(15 min,max(5 min,count×40 s))`; any job fails after 45 seconds without ≥1-block movement or target-count change. [D-51] | Keep five-consecutive-path-failure early exit; no-break membership is O(1) with identical guard contents. [D-26, D-51] |
 | Lease / reflexes | `lease.intervalMs=1000`, `lease.ttlMs=3000`; Java core nominally 20 Hz. [D-11] [D-32] | [INFERENCE] Controller-loss detection targets lease expiry plus a responsive client tick, not a hard real-time guarantee. [D-11] |
-| Shared vLLM capacity | `--max-num-seqs 8`; Hermes config also references port 8000. [serving args](evidence/vllm-container-args.txt) [Hermes config](evidence/hermes-endpoint-config.txt) | One harness request in flight is not exclusive capacity or a reserved latency share. [D-03] [D-20] [INFERENCE] |
+| Shared vLLM capacity | `--max-num-seqs 8`; Hermes config also references port 8000. [serving args](evidence/vllm-container-args.txt) [Hermes config](evidence/hermes-endpoint-config.txt) | Up to two harness requests (one per lane) do not reserve capacity or guarantee reply latency under shared load. [D-03, D-20, D-55] [INFERENCE] |
 | Chat output | ≥3000 ms between sends, ≤256 characters, ≤2 reply lines. [D-18] | Queue/rate limit in policy and enforce sends in mod; response generation does not bypass send cadence. [D-18] |
 
 [VERIFY] During the build, measure full-context TTFT/turn duration and observation/bridge round trips on the tower with Hermes active, including screenshot turns and planning mode; retain separate model, queue, skill-execution, and verification timings rather than promoting the tiny probe into an SLA. [D-21] [D-22] [D-38]
@@ -167,7 +182,7 @@ The client-only HUD has four lines: green `Qwen active` or red `PAUSED (<reason>
 
 Pause releases all synthetic controls: movement, mining, navigation, item use, attack/use, and Baritone work—not just movement booleans—and emits `qc.pause`. [D-11] [D-35] Baritone documents that cancellation can leave an uncancelable movement finishing, so the hard-stop claim must be demonstrated with the actual mixins and client version. [Baritone cancellation](https://github.com/cabaletta/baritone/blob/25111daedf1d59e6a8dfb5a3e61885cdb8d953df/src/api/java/baritone/api/behavior/IPathingBehavior.java#L74-L105) [VERIFY] Distinguish physical from synthetic input and prove all four stop controls release the complete input set. [D-11] [D-38]
 
-Chat appears only when Jared types in-game himself (or uses operator-console `say <text>`) or the agent replies to an incoming non-self addressed message: `SirWaffleshnoz` (case-insensitive substring), `jared` (case-insensitive whole word), or any whisper. Activation, F8/manual takeover, stop/quit, lease expiry and disconnect produce no lifecycle chat. Code rejects `chat_say` / `chat_reply` with `chat is only for replying to a message that mentions you` unless the current request contains an incoming non-self `player` event with `mentionsMe=true` or a `whisper` in observation `recentChat` or pending `mustReply`; non-addressed context and historical chat alone are insufficient. The system prompt requires the same addressed-only replies. AI explanation when asked and allowlisted commands such as `/home` remain permitted. [D-48] [D-47] [D-16] [D-29]
+Chat appears only when Jared types in-game (or uses console `say <text>`) or the agent replies to a fresh non-self player mention, whisper or eligible five-minute follow-up. Activation, F8/manual takeover, stop/quit, lease expiry and disconnect produce no lifecycle chat. Model chat tools require a chat-lane request with at least one `mustReply`/`followUps` entry; other attempts retain `chat is only for replying to a message that mentions you`. The body lane has no chat tools. System lines, non-addressed context outside a conversation window, and history never authorize replies. AI explanation when asked and allowlisted commands such as `/home` remain permitted. [D-48, D-47, D-54, D-55, D-56, D-57, D-16, D-29]
 
 ## 8. Failure domains and recovery
 
