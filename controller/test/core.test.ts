@@ -521,3 +521,36 @@ test('a Java reflex pause cancels planning without releasing the body; other pau
     assert.deepEqual(new Set(releases), releaseMethods);
   } finally {await loop.close();}
 });
+
+test('after history compaction every planning request has exactly one leading system message', {timeout: 10000}, async t => {
+  const config = loadConfig(DEFAULT_CONFIG_PATH);
+  const bridge: Bridge = {async health() {return true;}, async rpc<T>(): Promise<T> {return {} as T;}};
+  const events: Events = {on() {return () => {};}, async next() {return null;}};
+  const notes: Notes = {home: null, zones: [], places: []};
+  const store: NotesStore = {get() {return notes;}, async update(fn) {fn(notes);}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
+  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  const done = Promise.withResolvers<void>();
+  t.signal.addEventListener('abort', () => done.reject(new Error('compaction regression cancelled')), {once: true});
+  let planning = 0, compactions = 0, summarizedRequests = 0;
+  const problems: string[] = [];
+  const loop = createLoop({config, bridge, events, notes: store, chat, heuristics, log() {}, record() {}, llm: {
+    async complete(messages, tools) {
+      if (tools.length === 0) {compactions++; return {content: 'Earlier: recalled notes several times.', reasoning: null, toolCalls: [], usage: {}};}
+      planning++;
+      const systemAt = messages.flatMap((message, i) => message.role === 'system' ? [i] : []);
+      if (systemAt.length !== 1 || systemAt[0] !== 0) problems.push(`request ${planning}: system messages at ${JSON.stringify(systemAt)}`);
+      const first = messages[0];
+      if (first && first.role === 'system' && typeof first.content === 'string' && first.content.includes('Prior observed context')) summarizedRequests++;
+      if (summarizedRequests >= 2 || planning >= 40) {done.resolve(); return {content: 'done', reasoning: null, toolCalls: [], usage: {}};}
+      return {content: null, reasoning: null, usage: {}, toolCalls: [{id: `recall-${planning}`, type: 'function', function: {name: 'recall', arguments: '{"query":"home"}'}}]};
+    },
+  }});
+  try {
+    loop.instruction('keep recalling notes'); loop.resume();
+    await done.promise;
+    assert.deepEqual(problems, []);
+    assert.ok(compactions >= 1);
+    assert.ok(summarizedRequests >= 2);
+  } finally {await loop.close();}
+});
