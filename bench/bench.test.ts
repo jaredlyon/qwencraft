@@ -30,7 +30,8 @@ test("bench config uses isolated ports and config-relative paths", () => {
   assert.equal(config.paths.notesFile, fileURLToPath(new URL("./server/bench-notes.json", import.meta.url)));
   assert.equal(config.paths.transcriptDir, fileURLToPath(new URL("./logs", import.meta.url)));
   assert.equal(config.home, null);
-  assert.deepEqual(config.chat.nicknames, ["QwenBench", "waffle"]);
+  assert.deepEqual(config.chat.nicknames, ["QwenBench"]);
+  assert.deepEqual(config.chat.wholeWords, ["jared"]);
   assert.deepEqual(config.commands.allowlist, ["/spawn", "/home", "/sethome", "/msg", "/r", "/tell"]);
 });
 

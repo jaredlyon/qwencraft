@@ -17,22 +17,22 @@ Use one controller process and ordinary modules, not MCP sessions or a second ag
 | `loop.ts` | Generation ownership, one active skill, wake batching, interruption, self-goals. | [D-19] [D-20] |
 | `tools.ts` | Exact curated tool schemas and dispatch to skills; no raw-RPC tool. | [D-09] [D-10] |
 | `skills.ts` | Deterministic body compositions and observed postconditions. | [D-07] [D-09] |
-| `chat-policy.ts` | Addressing, untrusted-chat policy, public/private reply budgeting. | [D-15] [D-17] [D-18] [D-36] |
+| `chat-policy.ts` | Addressed-only wake/reply policy, untrusted chat, public/private reply budgeting. | [D-48] [D-17] [D-18] [D-36] |
 | `heuristics.ts` | Load `heuristics/*.ts`, ordered hooks, hot reload and exception isolation. | [D-25] |
 | `memory.ts` | Rolling summary and `notes.json`; no vector store. | [D-33] |
 | `console.ts` | Terminal-only instruction parsing and operator commands. | [D-05] |
 | `main.ts` | Startup, lease timer, reconnect/respawn coordination, orderly shutdown, JSONL transcript. | [D-11] [D-24] [D-34] |
 | `selfinfo.ts` | Curated `ABOUT_ME`, shared outgoing redaction, bounded docs/code search for `harness_info`. | [D-43, D-44, D-45] [Ctl-selfinfo] |
 
-Keep these exact configuration keys and initial values; brackets below indicate an operator-supplied list, not a literal JSON value. [D-10] [D-18] [D-21] [D-26] [D-29] [D-30] [D-31] [D-34] [D-36] [D-37]
+Keep these exact configuration keys and initial values; brackets below indicate an operator-supplied list, not a literal JSON value. [D-10] [D-18] [D-21] [D-26] [D-29] [D-48] [D-31] [D-34] [D-36] [D-37]
 
 | Key | Initial value / semantics | Basis |
 |---|---|---|
 | `llm.baseUrl` | `http://192.168.100.2:8000/v1` | [D-03] [LLM-probe] |
 | `llm.model` | `qwen3.8-flash-next` | [D-21] [LLM-probe] |
 | `llm.thinking` | `"planning"`: thinking only for a new console instruction and failed-tool replan on that instruction; resume/idle/self-goal/chat/death/successful completion remain off. `"off"` disables thinking entirely. | [D-21, D-46] |
-| `chat.nicknames` | `["SirWaffleshnoz","waffle"]` | [D-30] |
-| `chat.wholeWords` | `["bot","ai"]` | [D-30] |
+| `chat.nicknames` | `["SirWaffleshnoz"]`; case-insensitive substring matching | [D-48] |
+| `chat.wholeWords` | `["jared"]`; case-insensitive whole-word matching | [D-48] |
 | `chat.minIntervalMs` | `3000` | [D-18] |
 | `chat.maxLen` | `256` | [D-18] |
 | `chat.maxLinesPerReply` | `2` | [D-18] |
@@ -50,9 +50,9 @@ Keep these exact configuration keys and initial values; brackets below indicate 
 | `server.host` | `raycraft.ddnsfree.com` | [D-02] [server-evidence] |
 | `server.port` | `25565` | [D-02] [server-evidence] |
 
-Apply `{reflex,protect,chat,commandAllowlist,nicknames}` through `qc.config.apply`: `ReflexConfig={enabled:boolean,eatAtFood:number}`, `ChatLimits={minIntervalMs:number,maxLen:number}`, `Nicknames={names:string[],wholeWords:string[]}`; map `commands.allowlist` to `commandAllowlist`, `chat.nicknames` to `nicknames.names`, and `chat.wholeWords` to `nicknames.wholeWords`. Enable the configured Java reflex core through `reflex.enabled`, without adding a controller config key. [D-10] [D-18] [D-25] [D-26] [D-30] [D-32] [Mod]
+Apply `{reflex,protect,chat,commandAllowlist,nicknames}` through `qc.config.apply`: `ReflexConfig={enabled:boolean,eatAtFood:number}`, `ChatLimits={minIntervalMs:number,maxLen:number}`, `Nicknames={names:string[],wholeWords:string[]}`; map `commands.allowlist` to `commandAllowlist`, `chat.nicknames` to `nicknames.names`, and `chat.wholeWords` to `nicknames.wholeWords`. Enable the configured Java reflex core through `reflex.enabled`, without adding a controller config key. [D-10] [D-18] [D-25] [D-26] [D-48] [D-32] [Mod]
 
-The mod's `qc.chat.mentionsMe` is authoritative; controller recomputation may add routing context but must not negate a must-consider event. Plugins cannot weaken mod chat limits or the allowlist. [D-14] [D-15] [D-18] [D-25] [D-30] [Mod]
+The mod's `qc.chat.mentionsMe` is authoritative; controller recomputation may add routing context but must not negate an addressed event. An incoming non-self `player` message with `mentionsMe=true`, or any incoming non-self whisper, can wake conversation and authorize a reply; other chat is context only and does not wake the model. Plugins cannot weaken this gate, mod chat limits or the allowlist. [D-14] [D-48] [D-18] [D-25] [Mod]
 
 ## 2. Bridge client and event recovery
 
@@ -80,7 +80,7 @@ A ring gap or bridge ID reset produces the synthetic local event `controller.his
 
 | Companion event | Controller reaction | Basis |
 |---|---|---|
-| `qc.chat` | Preserve `{kind,senderUuid,senderName,text,signed,mentionsMe,self}`; own echoes do not trigger another reply; other lines enter a bounded batch, addressed/whisper messages must be considered. | [D-14] [D-15] [D-30] [Mod] |
+| `qc.chat` | Preserve `{kind,senderUuid,senderName,text,signed,mentionsMe,self}`; suppress own echoes; only incoming non-self `player` messages with `mentionsMe=true` or whispers wake conversation. Non-addressed lines remain bounded observation `recentChat` context for the next turn. | [D-14] [D-48] [Mod] |
 | `qc.pause` | Update `{paused,reason}`; invalidate generation and cancel pending body work on pause; no automatic unpause. | [D-11] [D-20] [Mod] |
 | `qc.task` | Match `taskId`; accept only `at_goal`, `calc_failed`, `canceled`, `lost_control`; reconcile status and the skill-specific position/inventory postcondition. Only the controller declares `done`/`failed`, never the mod event. | [D-08] [D-20] [D-42] [Mod] [B-events] [B-lifecycle] [B-mine] |
 | `qc.reflex` | Pause/invalidate loop work; reactivate only at least 1.5 s after the last reflex event and when fresh `player.getState.usingItem=false`. Java cancels Baritone/MCP work and keeps Baritone canceled every tick during a reflex. This settling heuristic is not an explicit completion event. | [D-20, D-32] [Ctl-main] [mod/src/main/java/dev/qwencraft/control/Reflexes.java](../mod/src/main/java/dev/qwencraft/control/Reflexes.java) |
@@ -140,8 +140,8 @@ Stop cleanup shared by body skills is `qc.baritone.stop`, `interact.stopBreaking
 | `chest_deposit(x,y,z,item,count)` | Approach own/authorized chest, `container.open/state`; `container.transfer{direction:"put"}` only when whole stacks match requested count, otherwise counted clicks; player inventory reread, close. [M-container] [M-player] [Mod] [D-09] [D-26] | Exact source decrease and destination increase; `chest inaccessible`, `insufficient items`, `transfer unverified`. [D-09] | `!putInChest`. [MC-A4] |
 | `chest_withdraw(x,y,z,item,count)` | Same menu path; `container.transfer{direction:"take"}` only for exact safe stacks, otherwise counted clicks. [M-container] [M-player] [D-09] [D-26] | Exact source decrease and player increase; `insufficient items`, `inventory full`, `transfer unverified`. [D-09] | `!takeFromChest`, `!viewChest`. [MC-A4] |
 | `drop(item,count)` | Select/swap matching stacks; use `interact.dropItem{wholeStack:false}` repeatedly for partial counts, or `inventory.dropSlot` for exact whole stacks; reread inventory. [M-interact] [M-inventory] [M-player] [D-09] | Exact decrease, with observed item entities as corroboration; `insufficient items`, `drop unverified`. [D-09] | `!discard`. [MC-A4] |
-| `chat_say(text)` | Current-request incoming non-self `player`/`whisper` gate → controller reply budget → `qc.chat.send{text}`; reply-only public text, not a slash-command. [Mod] [D-18] [D-47] | `sent:true`; acknowledge submission, not remote receipt; `chat is only for replying to another player's message`, `rate_limited`, `too_long`. [D-18] [D-47] | Conversation output is agent policy rather than this exact tool. [MC-output] |
-| `chat_reply(to,text)` | Same current-request gate and budget; whisper route produces `/msg <to> <text>` through `qc.chat.send`, otherwise public addressed response. [Mod] [D-18] [D-36] [D-47] | `sent:true`; count whole formatted text toward length limit; `chat is only for replying to another player's message`, `recipient ambiguous`, `rate_limited`, `too_long`, `command_not_allowed`. [D-18] [D-36] [D-47] | `!startConversation`/agent output are analogues. [MC-A7] [MC-output] |
+| `chat_say(text)` | Current-request incoming non-self addressed-message gate (`player` with `mentionsMe=true`, or `whisper`) → controller reply budget → `qc.chat.send{text}`; reply-only public text, not a slash-command. [Mod] [D-18] [D-48] | `sent:true`; acknowledge submission, not remote receipt; `chat is only for replying to a message that mentions you`, `rate_limited`, `too_long`. [D-18] [D-48] | Conversation output is agent policy rather than this exact tool. [MC-output] |
+| `chat_reply(to,text)` | Same current-request addressed-message gate and budget; whisper route produces `/msg <to> <text>` through `qc.chat.send`, otherwise public addressed response. [Mod] [D-18] [D-36] [D-48] | `sent:true`; count whole formatted text toward length limit; `chat is only for replying to a message that mentions you`, `recipient ambiguous`, `rate_limited`, `too_long`, `command_not_allowed`. [D-18] [D-36] [D-48] | `!startConversation`/agent output are analogues. [MC-A7] [MC-output] |
 | `run_command(command)` | Validate first token against `commands.allowlist`, then `qc.chat.send`; never `command.run`. [Mod] [D-10] [D-29] [D-36] | Sent command plus applicable observable consequence (e.g. position for travel); submission-only explicitly stated if no outcome is observable; `command_not_allowed`, `command outcome unverified`. [D-09] [D-29] | No equivalent curated slash-command action claimed. [MC-A1] [MC-A2] [MC-A3] [MC-A4] [MC-A5] [MC-A6] [MC-A7] |
 | `remember(kind,name,note,x?,y?,z?)` | Local validated `notes.json` write; current coordinates via `player.getState` when location needed. [M-player] [D-33] | Persisted note readback; `memory write failed`. [D-33] | `!rememberHere`. [MC-A3] |
 | `recall(query)` | Local notes lookup; include server/dimension and observation age. [D-33] | Matching notes or explicit empty result; `memory read failed`. [D-33] | `!savedPlaces`, `!goToRememberedPlace`. [MC-query] [MC-A3] |
@@ -186,7 +186,7 @@ This field inventory defines the per-turn JSON exposed as `Observation = Record<
 | `timeWeather` | `qc.world.state{}` → `{dimension,dayTime,gameTime,raining,thundering}`, read from client level by the companion. | [D-09] [Mod] |
 | `control`, `task` | `qc.control.state`, `qc.baritone.status`, last matching `qc.task`. | [D-11] [D-20] [Mod] |
 | `goals`, `home`, `zones` | Controller goal stack and configuration: `/home`-derived home when initially null, overridden by `home set`; never derived from untrusted chat. | [D-05] [D-26] [D-31] [D-37] [D-40] |
-| `recentChat` | Batched `qc.chat` entries preserving identity, addressing and self flags. | [D-14] [D-15] [Mod] |
+| `recentChat` | Bounded `qc.chat` entries preserving identity, addressing and self flags; includes non-addressed context without waking the model or authorizing chat tools. | [D-14] [D-48] [Mod] |
 | `lastResult` | Last `{ok,summary,observedDelta}`, partial progress and cancellation included. | [D-09] [D-20] |
 | `hints` | Ordered `onObservation` strings, advisory only. | [D-25] |
 
@@ -198,7 +198,7 @@ The companion resolves 26.3 client accessors, including `getOverworldClockTime()
 
 ## 6. Loop, cancellation and self-goals
 
-Wake planning for a new console instruction, chat batches (must-consider mention/whisper), skill completion/failure, death/respawn, or an idle self-goal timer; maintain one current instruction/goal context, one generation counter, one active skill and one model request. [D-05] [D-15] [D-19] [D-20] [D-24]
+Wake planning for a new console instruction, incoming non-self addressed chat (`player` with `mentionsMe=true`, or any whisper), skill completion/failure, death/respawn, or an idle self-goal timer; non-addressed chat remains context only and does not wake the model. Maintain one current instruction/goal context, one generation counter, one active skill and one model request. [D-05] [D-48] [D-19] [D-20] [D-24]
 
 1. Snapshot the current generation and control state; build observation and advisory hints. Paused state permits observation/status but no new controller body skill; Java reflexes remain active under `console`/`lease_expired` and disabled under `hotkey`/`manual_input`. [D-11] [D-25] [D-32]
 2. Request the model with thinking only for a new console-instruction plan or failed-tool replan on that instruction; all other wakes run without thinking. Preserve terminal authority and untrusted chat separation. [D-05, D-17, D-21, D-46]
@@ -210,7 +210,7 @@ The loop owns the goal stack; skills communicate goal mutations only through suc
 
 A new free-text console instruction increments generation immediately, aborts inference/skill waits, performs shared stop cleanup, observes settled state, then replans; an old response/task event cannot start or finish the replacement goal. Mindcraft's action manager is a cancellation precedent, not the selected chat-authority policy. [D-05] [D-20] [MC-manager]
 
-Incoming chat alone does not gain body authority or replace a console goal: consider it at a safe step boundary or bounded conversational turn, restrict chat-triggered output to replies, and retain the operator's task. Chat must never smuggle movement, commands, goal changes or memory instructions into an execution batch. [D-15] [D-17] [D-20]
+Incoming addressed chat alone does not gain body authority or replace a console goal: consider it at a safe step boundary or bounded conversational turn, restrict chat-triggered output to replies to addressed messages, and retain the operator's task. Non-addressed chat remains context only. Chat must never smuggle movement, commands, goal changes or memory instructions into an execution batch. [D-48] [D-17] [D-20]
 
 `qc.task` reports only `at_goal`, `calc_failed`, `canceled`, or `lost_control`; none is a final success flag. Reconcile the matching task/status and fresh position/inventory postcondition before the controller alone declares `done`/`failed`; record cancellation/partial progress rather than completing an obsolete generation. A calculation failure may leave mining retrying, and loss of control can accompany normal arrival, so signals must be interpreted with lifecycle state and observations; inactivity alone is not success, and `isPathing()` can be false while paused. [D-08] [D-09] [D-20] [D-42] [B-events] [B-mine] [B-lifecycle] [B-path]
 
@@ -270,7 +270,7 @@ export default {
 };
 ```
 
-A plugin `onChat` decision may influence the response but cannot discard the transcript of other people's lines or suppress consideration of addressed questions; the controller retains must-consider flags, and replies still pass mod rate/length/allowlist gates. [D-15] [D-18] [D-25] [D-36]
+A plugin `onChat` decision may influence an addressed response but cannot discard other people's context, suppress consideration of addressed questions, or wake/reply to non-addressed chat. The controller retains addressed flags; replies still pass the current-request addressed-message gate and mod rate/length/allowlist guards. [D-48] [D-18] [D-25] [D-36]
 
 [VERIFY] Establish exclusive movement ownership for TS `ReflexIntent` versus Java reflexes/Baritone, and prove hook intents cannot continue after a pause or obsolete generation. [D-11] [D-20] [D-25] [D-32]
 
@@ -306,7 +306,7 @@ Input sits on a `qwencraft> ` prompt on the bottom line. Every controller messag
 
 Never let `status`/`home set`/zone administration accidentally replace the current instruction, and never treat a player typing these words in Minecraft chat as console input. [D-05] [D-17]
 
-Chat appears only when Jared types in-game himself (or uses operator-console `say <text>`) or when the agent replies to another player's message. Activation, F8/manual takeover, console `stop`/`quit`, lease expiry and disconnect produce no lifecycle chat. The system prompt forbids unprompted narration/status. In code, `chat_say` / `chat_reply` return `{ok:false, summary:"chat is only for replying to another player's message"}` unless the current planning request includes an incoming non-self `player`/`whisper` event in observation `recentChat` or pending `mustReply`; historical chat alone is insufficient. Explaining AI control when asked remains allowed, and allowlisted commands such as `/home` are not chat. [Ctl-loop] [Ctl-main] [D-16, D-29, D-47]
+Chat appears only when Jared types in-game himself (or uses operator-console `say <text>`) or when the agent replies to an incoming non-self addressed message: the account username (`SirWaffleshnoz`, case-insensitive substring), whole-word `jared` (case-insensitive), or any whisper. Activation, F8/manual takeover, console `stop`/`quit`, lease expiry and disconnect produce no lifecycle chat. The system prompt forbids unprompted narration/status. In code, `chat_say` / `chat_reply` return `{ok:false, summary:"chat is only for replying to a message that mentions you"}` unless the current planning request includes a non-self `player` event with `mentionsMe=true` or a `whisper` in observation `recentChat` or pending `mustReply`; non-addressed and historical chat alone are insufficient. Explaining AI control when asked remains allowed, and allowlisted commands such as `/home` are not chat. [Ctl-loop] [Ctl-main] [D-16, D-29, D-47, D-48]
 
 For self-Q&A, append `ABOUT_ME` to the system prompt and permit `harness_info` alongside observe/chat tools on chat-only turns. Answers may explain model/architecture, safety rules, requested code details and observed live goal/results/latency. Every policy line is code-redacted before length splitting; console/command sends use the same redactor. Network details, credentials and local paths are withheld, not game home/zone coordinates or repo-relative source filenames. [Ctl-selfinfo] [Ctl-loop] [Ctl-chat] [Ctl-main] [Ctl-skills] [D-43, D-44, D-45]
 

@@ -160,13 +160,13 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 ## D-15 — Model considers all chat
 
-**Decision:** every chat line enters the model's conversational input; mentions/nicknames and whispers are must-consider, while other lines can be batched. [D-15, D-30]
+**Decision:** **Superseded by D-48 on 2026-10-04.** The original all-chat conversational scheduling is retired: only incoming non-self addressed messages or whispers wake the model; non-addressed chat remains observation `recentChat` context for the next turn. [D-15, D-48]
 
-**Alternatives considered:** addressed-only filtering; rejected by the all-chat choice. [D-15]
+**Alternatives considered:** addressed-only filtering was originally rejected; D-48 now selects it while preserving non-addressed context. [D-15, D-48]
 
 **Evidence:** Fabric exposes separate CHAT and GAME receive events; MCPFabric's event ring supports cursor-based recent-event retrieval. [Chat events][fabric-chat] [Event ring][mcp-events]
 
-**Consequences/risks:** suppress own echoes and separate conversational consideration from play authority; chat does not authorize tasks. [D-15, D-17] `[INFERENCE]` batching limits wake frequency but does not establish acceptable shared-model load. [D-15] [Probe](evidence/vllm-capability-probe.json.txt)
+**Consequences/risks:** suppress own echoes and separate conversational consideration from play authority; chat does not authorize tasks. D-48 removes non-addressed chat wakes, not the terminal-only instruction boundary. [D-15, D-17, D-48]
 
 ## D-16 — Explicit AI disclosure
 
@@ -310,13 +310,13 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 ## D-30 — Addressing aliases
 
-**Decision:** use `chat.nicknames=["SirWaffleshnoz","waffle"]` and `chat.wholeWords=["bot","ai"]` to flag must-consider conversation. [D-30, D-15]
+**Decision:** **Superseded by D-48 on 2026-10-04.** The original additional addressing aliases are retired. Current configuration is `chat.nicknames=["SirWaffleshnoz"]` and `chat.wholeWords=["jared"]`; whispers always count as addressing the agent. [D-30, D-48]
 
-**Alternatives considered:** exact player-name-only matching; operator chose the additional aliases. [D-30]
+**Alternatives considered:** exact player-name-only matching; the original broader aliases, since removed by D-48. [D-30, D-48]
 
 **Evidence:** the observed username is SirWaffleshnoz; incoming Fabric chat includes rendered text and optional sender metadata. [Client](evidence/client-process.txt) [Incoming chat][fabric-chat]
 
-**Consequences/risks:** `[INFERENCE]` broad words increase conversational false positives, not command authority. [D-30, D-05] [Incoming chat][fabric-chat] Send `nicknames:{names,wholeWords}` through `qc.config.apply`; the mod-computed `qc.chat.mentionsMe` is authoritative. [D-30, D-14]
+**Consequences/risks:** addressing supplies attention, not command authority. Send `nicknames:{names,wholeWords}` through `qc.config.apply`; the mod-computed `qc.chat.mentionsMe` is authoritative. D-48 narrows matching to the account username and whole-word `jared`, with whispers independently addressed. [D-30, D-14, D-05, D-48]
 
 ## D-31 — Home-centered survival progression
 
@@ -488,13 +488,23 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 ## D-47 — Reply-only agent chat
 
-**Decision:** remove all control-transition chat and permit agent chat only in response to another player's message. This supersedes D-16's “announce on start/stop” part, not its “explain when asked” rule. Date: 2026-10-04; source: operator follow-up adjudication. [D-47, D-16]
+**Decision:** remove all control-transition chat and permit agent chat only as a reply. This supersedes D-16's “announce on start/stop” part, not its “explain when asked” rule. **D-48 tightens the gate to incoming addressed messages (mentionsMe or whisper)**; merely receiving a player message is no longer sufficient. Date: 2026-10-04; source: operator follow-up adjudication. [D-47, D-16, D-48]
 
 **Alternatives considered:** retain activation or human-takeover messages; suppress only console-stop messages; rely on the prompt alone to prevent unprompted chat. None meets the operator's reply-only requirement. [D-47]
 
 **Evidence:** operator text: “remove all chat messages about control being passed between me and the agent. the only time any other players should see something in chat is when i type directly through chat myself or the agent decides to respond in chat to somebody.” [D-47]
 
-**Consequences/risks:** Jared's direct in-game chat and operator-console `say <text>` remain available. The agent never sends unprompted narration, status or control-transition messages. `chat_say` / `chat_reply` are rejected in code with `{ok:false, summary:"chat is only for replying to another player's message"}` unless the current planning request carries at least one incoming non-self `player` or `whisper` chat event in observation `recentChat` or a pending `mustReply` entry; the system prompt states the same reply-only rule. Own echoes, system text and old rolling-history messages do not authorize a chat tool call. Replies may explain AI control when asked; allowlisted commands such as `/home` are not chat and remain permitted under their existing guards. [D-47, D-16, D-17, D-18, D-29, D-36]
+**Consequences/risks:** Jared's direct in-game chat and operator-console `say <text>` remain available. The agent never sends unprompted narration, status or control-transition messages. Under D-48, `chat_say` / `chat_reply` are rejected in code with `{ok:false, summary:"chat is only for replying to a message that mentions you"}` unless the current planning request carries an incoming non-self `player` event with `mentionsMe=true` or a `whisper` event in observation `recentChat` or pending `mustReply`. Own echoes, system text, non-addressed chat and old rolling-history messages do not authorize chat. Replies may explain AI control when asked; allowlisted commands such as `/home` remain under their existing guards. [D-47, D-48, D-16, D-17, D-18, D-29, D-36]
+
+## D-48 — Addressed-only agent chat
+
+**Decision:** permit agent `chat_say` / `chat_reply` only in response to an incoming non-self message containing the account username (`SirWaffleshnoz`, case-insensitive substring), the whole word `jared` (case-insensitive), or classified as a whisper. Use `chat.nicknames=["SirWaffleshnoz"]` and `chat.wholeWords=["jared"]`; the bench substitutes `["QwenBench"]` for the username. Whispers (/msg to the account) always count as addressing the agent, even without either name. Non-addressed chat is context only in observation `recentChat` for the next turn and does not wake the model. This supersedes D-15 and D-30 and tightens D-47's code gate. Date: 2026-10-04; source: operator follow-up adjudication. [D-48, D-15, D-30, D-47]
+
+**Alternatives considered:** count whispers only when they contain a name; keep the old nicknames (`waffle`, `bot`, `ai`). Both are rejected: private messages are inherently addressed, and the operator chose only the username and Jared. [D-48]
+
+**Evidence:** operator text: “retune the system so the agent only speaks in chat when the mc username is directly mentioned (also include 'jared' to that list because my name is jared)”. Follow-up ruling: “whispers (/msg to the account) always count as addressing the agent”. [D-48]
+
+**Consequences/risks:** the mod's `mentionsMe` remains authoritative; an incoming non-self `player` message must have that flag, while an incoming non-self `whisper` qualifies independently. The current-request `recentChat`/`mustReply` gate rejects other chat tool attempts with `chat is only for replying to a message that mentions you`. Addressing permits conversation, never gameplay instructions; own echoes, system messages and old rolling-history chat cannot authorize a reply. Direct operator chat, console `say <text>`, silent control transitions and allowlisted commands are unchanged. [D-48, D-14, D-17, D-36, D-47]
 
 ## Tensions accepted by the operator
 
@@ -502,7 +512,7 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 |---|---|
 | Third-party main-account testing + cache-based mining + parkour [D-02, D-27, D-28] | `[INFERENCE]` the combination increases anti-cheat/ban exposure compared with conservative sanctioned testing; owner approval and actual plugin behavior remain unverified. [Historical Matrix report][baritone-891] [X-ray appearance note][baritone-legit] [Parkour default][baritone-parkour] [Automation warning][litematica] |
 | Auto-reconnect versus moderation-aware bounds [D-24, D-34, D-41] | Recovery is not unlimited: configured delays permit at most three reconnects, reset only after one hour without disconnect; a fourth pre-reset disconnect requires console `resume`, and ban/staff-kick patterns prohibit retry. Callback availability does not identify moderation intent. [D-41, D-34] [Connection callbacks][fabric-connection] |
-| All-chat model input versus terminal-only task authority [D-15, D-17, D-05] | Treat chat as conversational data even when addressed or apparently friendly; metadata can be absent. Mindcraft's public-server warning specifically concerns code-enabled bots vulnerable to injection, a risk precedent rather than a tested qwencraft exploit. [Identity limits][fabric-chat] [Code-enabled warning][mindcraft-readme] |
+| Addressed chat versus terminal-only task authority [D-48, D-17, D-05] | Treat chat as conversational data even when addressed or apparently friendly; non-addressed lines remain context only, and metadata can be absent. Mindcraft's public-server warning specifically concerns code-enabled bots vulnerable to injection, a risk precedent rather than a tested qwencraft exploit. [Identity limits][fabric-chat] [Code-enabled warning][mindcraft-readme] |
 | Convenience versus profile isolation [D-12] | `[INFERENCE]` a shared `.minecraft` gameDir also shares `mods/` with other Fabric profiles using that directory; inspect profile configuration before adding the stack. [Observed gameDir](evidence/client-process.txt) [Installer profile][installer-profile] |
 | Movement defaults versus explicit parkour override [D-28] | Keep sprint/place/break defaults, but record parkour as an intentional false→true override rather than calling it an upstream default. [Basic defaults][baritone-basic] [Parkour defaults][baritone-parkour] |
 | Home convenience versus a proven arrival [D-31, D-37, D-39, D-40] | The operator's existing `/sethome` settles the source, not teleport success: derive unset home once through `/home`, print the observed arrival and allow console override; horizontal radius remains controller-only, with unfenced Baritone paths. [D-39, D-40, D-37] |

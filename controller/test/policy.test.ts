@@ -13,7 +13,7 @@ import type { Bridge, ChatEvent, ChatMessage, Config, Ctx, HeuristicsHost, Notes
 
 const config: Config = {
   llm: { baseUrl: "http://localhost/v1", model: "qwen", thinking: "planning" },
-  chat: { nicknames: ["SirWaffleshnoz", "waffle"], wholeWords: ["bot", "ai"], minIntervalMs: 5, maxLen: 256, maxLinesPerReply: 2 },
+  chat: { nicknames: ["SirWaffleshnoz"], wholeWords: ["jared"], minIntervalMs: 5, maxLen: 256, maxLinesPerReply: 2 },
   commands: { allowlist: ["/msg", "/home"] }, protect: { naturalBlocks: ["minecraft:oak_log"], zones: [] }, home: [0, 64, 0], selfGoal: { radius: 256 }, reflex: { eatAtFood: 14 },
   reconnect: { maxPerHour: 3, backoffMs: [30000, 120000, 600000], stopPatterns: ["ban"] }, lease: { ttlMs: 3000, intervalMs: 1000 }, server: { host: "localhost", port: 25570 },
   bridge: { url: "http://localhost:25599", configPath: "unused" }, paths: { heuristicsDir: "unused", notesFile: "unused", transcriptDir: "unused" },
@@ -38,16 +38,23 @@ function recordingBridge() {
 
 test("addressing preserves authoritative flags, Unicode whole words, and self suppression", () => {
   let hooks = 0;
-  const h = { ...emptyHost, onChat() { hooks++; return { ignore: true as const }; } };
+  const h = { ...emptyHost, onChat() { hooks++; return undefined; } };
   const { bridge } = recordingBridge();
   const chat = createChatPolicy(config, bridge, h, () => ctx);
-  for (const text of ["BOT?", "hey, AI!", "SirWaffleshnoz?", "wafflebot"]) assert.deepEqual(chat.route(event(text)), { kind: "model", mustConsider: true });
-  for (const text of ["robot", "stairs", "ébot", "boté", "bot_thing"]) assert.deepEqual(chat.route(event(text)), { kind: "ignore" });
+  for (const text of ["JARED?", "hey, Jared!", "sirwaffleshnoz?", "@SirWaffleshnozSuffix"]) assert.deepEqual(chat.route(event(text)), { kind: "model", mustConsider: true });
+  for (const text of ["waffle", "bot", "ai", "jareds", "éjared", "jaredé", "jared_thing"]) assert.deepEqual(chat.route(event(text)), { kind: "model", mustConsider: false });
   assert.deepEqual(chat.route(event("no local mention", { mentionsMe: true })), { kind: "model", mustConsider: true });
   assert.deepEqual(chat.route(event("hello", { kind: "whisper" })), { kind: "model", mustConsider: true });
-  assert.deepEqual(chat.route(event("BOT", { self: true })), { kind: "ignore" });
-  assert.equal(hooks, 12);
+  assert.deepEqual(chat.route(event("JARED", { self: true })), { kind: "ignore" });
+  assert.equal(hooks, 14);
   assert.deepEqual(createChatPolicy(config, bridge, emptyHost, () => ctx).route(event("ambient")), { kind: "model", mustConsider: false });
+  const replies = createChatPolicy(config, bridge, { ...emptyHost, onChat: () => ({ reply: "Hello!" }) }, () => ctx);
+  assert.deepEqual(replies.route(event("ambient")), { kind: "model", mustConsider: false });
+  assert.deepEqual(replies.route(event("Jared?", { mentionsMe: true })), { kind: "reply", text: "Hello!" });
+  const ignored = createChatPolicy(config, bridge, { ...emptyHost, onChat: () => ({ ignore: true }) }, () => ctx);
+  assert.deepEqual(ignored.route(event("ambient")), { kind: "ignore" });
+  assert.deepEqual(ignored.route(event("Jared?", { mentionsMe: true })), { kind: "ignore" });
+  assert.deepEqual(ignored.route(event("hello", { kind: "whisper" })), { kind: "ignore" });
 });
 
 test("chat splits, condenses, paces, and budgets /msg prefix without changing the recipient", async () => {

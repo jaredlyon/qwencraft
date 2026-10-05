@@ -1,6 +1,6 @@
 {
   "llm": {"baseUrl": "http://192.168.100.2:8000/v1", "model": "qwen3.8-flash-next", "thinking": "planning"},
-  "chat": {"nicknames": ["QwenBench", "waffle"], "wholeWords": ["bot", "ai"], "minIntervalMs": 3000, "maxLen": 256, "maxLinesPerReply": 2},
+  "chat": {"nicknames": ["QwenBench"], "wholeWords": ["jared"], "minIntervalMs": 3000, "maxLen": 256, "maxLinesPerReply": 2},
   "commands": {"allowlist": ["/spawn", "/home", "/sethome", "/msg", "/r", "/tell"]},
   "protect": {
     "naturalBlocks": [

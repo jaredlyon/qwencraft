@@ -86,8 +86,8 @@ export function createChatPolicy(c: Config, b: Bridge, h: HeuristicsHost, ctx: (
       const lower = e.text.toLowerCase();
       const mentioned = c.chat.nicknames.some(name => lower.includes(name.toLowerCase())) || c.chat.wholeWords.some(word => new RegExp(`(?<![\\p{Alphabetic}\\p{Nd}\\p{M}\\p{Pc}\\u200C\\u200D])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{Alphabetic}\\p{Nd}\\p{M}\\p{Pc}\\u200C\\u200D])`, "iu").test(e.text));
       const mustConsider = e.mentionsMe || mentioned || e.kind === "whisper";
-      if (decision && "reply" in decision) return { kind: "reply", text: decision.reply };
-      if (decision && "ignore" in decision && !mustConsider) return { kind: "ignore" };
+      if (mustConsider && decision && "reply" in decision) return { kind: "reply", text: decision.reply };
+      if (decision && "ignore" in decision) return { kind: "ignore" };
       return { kind: "model", mustConsider };
     },
     say(text) { return send(text, ""); },

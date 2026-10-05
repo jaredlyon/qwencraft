@@ -2,12 +2,12 @@
 
 ## 1. Objective and scope
 
-Phase 1 gives the local Qwen model a guarded body in the user's visible Minecraft client: the tower terminal supplies instructions, the controller plans and executes verified skills, and the client reads and answers RayCraft chat while the operator watches. [D-00] [D-01] [D-02] [D-03] [D-05] [D-15]
+Phase 1 gives the local Qwen model a guarded body in the user's visible Minecraft client: the tower terminal supplies instructions, the controller plans and executes verified skills, and the client retains RayCraft chat as context while replying only to incoming non-self addressed messages (username substring, whole-word Jared, or any whisper). The operator watches. [D-00] [D-01] [D-02] [D-03] [D-05] [D-48]
 
 | In scope | Boundary / non-goal | Decisions |
 |---|---|---|
 | Visible `SirWaffleshnoz` client, Fabric companion mod, Baritone navigation | No second account, headless replacement client, or server-side control deployment | [D-01] [D-08] |
-| Console tasks, chat Q&A, AI explanation when asked, idle survival progression | Other players can ask questions, not issue action instructions; agent chat is reply-only | [D-05] [D-16] [D-17] [D-19] [D-31] [D-47] |
+| Console tasks, addressed chat Q&A, AI explanation when asked, idle survival progression | Other players can ask addressed questions, not issue action instructions; agent chat replies require the account username, whole-word Jared, or a whisper | [D-05] [D-16] [D-17] [D-19] [D-31] [D-47] [D-48] |
 | Curated skills, hot-reloaded `heuristics/*.ts`, JSON notes | No model-generated executable code or general plugin framework | [D-09] [D-25] [D-33] |
 | Four stop controls, action-path guards, bounded session recovery | No guarantee of third-party server permission or anti-cheat acceptance | [D-02] [D-10] [D-11] [D-24] [D-34] |
 | Phase-1 harness documentation | Blueprint/house architecture is deferred, not a hidden dependency of this harness | [D-00] |
@@ -72,7 +72,7 @@ Use three timescales: Qwen chooses goals/tools, controller skills drive bounded 
 
 | Layer | Granularity | Responsibility / authority |
 |---|---|---|
-| Qwen planner | [INFERENCE] Seconds per turn, not a gameplay latency guarantee; completion, failure, instruction, chat, or idle wake-up. [D-15] [D-19] [D-20] | Curated tools such as `go_to`, `collect`, `craft`, `smelt`; thinking off except planning/replanning. [D-09] [D-21] |
+| Qwen planner | [INFERENCE] Seconds per turn, not a gameplay latency guarantee; completion, failure, instruction, incoming non-self addressed chat (mention/whisper), or idle wake-up. Non-addressed chat does not wake it. [D-48] [D-19] [D-20] | Curated tools such as `go_to`, `collect`, `craft`, `smelt`; thinking off except planning/replanning. [D-09] [D-21] |
 | Controller skills | Seconds–minutes per task, not model-selected per-tick keypresses. [D-07] [D-09] [INFERENCE] Duration depends on terrain/resources. | Execute one body workflow; verify inventory/block/position postconditions before `{ok,summary,observedDelta}`. [D-09] |
 | Java reflexes in `qwencraft` | Nominal 20 Hz / 50 ms tick checks; no model/network dependency. [D-32] | Eat at food ≤ `reflex.eatAtFood=14` when an edible item exists; escape lava/fire/drowning; retaliate against the hostile that damaged the player. [D-32] |
 | User heuristics | `onObservation`, `onPlanProposed`, `onChat`; nonblocking `onTick` at approximately 5–10 Hz. [D-25] [D-32] | Hints, veto/rewrite, chat decisions, guarded preempting intents; never disabling pause/protect/chat/allowlist enforcement. [D-10] [D-25] |
@@ -88,7 +88,7 @@ When `home=null`, send the allowlisted `/home` once, wait for arrival, record th
 | Wake event | Loop treatment | Decisions |
 |---|---|---|
 | New console instruction | Increment generation, cancel active work, re-observe, replan; reject old-generation results before any dispatch/report | [D-05] [D-20] |
-| `qc.chat` | Every non-self line reaches model consideration, batching ordinary lines; authoritative `mentionsMe` and whispers are must-consider, never action authority | [D-14] [D-15] [D-17] [D-30] |
+| `qc.chat` | Incoming non-self `player` messages with authoritative `mentionsMe=true`, or any incoming non-self whisper, wake conversation; non-addressed lines remain observation `recentChat` context for the next turn without waking the model. Chat never supplies action authority | [D-14] [D-48] [D-17] |
 | `qc.task` / skill completion or failure | Mod event states are only `at_goal`/`calc_failed`/`canceled`/`lost_control`; controller verifies actual state and alone declares done/failed, appends `{ok,summary,observedDelta}`, then continues or replans | [D-09] [D-20] [D-42] |
 | `qc.death` / respawn | Invalidate current work, auto-respawn, re-observe location/inventory before further work | [D-20] [D-24] |
 | Idle timer | Self-goal step: tools → food → iron → shelter/bed within horizontal home radius, with `/home`-derived initialization when `home=null`; suspended while paused or inference is unavailable | [D-19] [D-31] [D-37] [D-39] [D-40] [INFERENCE] |
@@ -159,7 +159,7 @@ MCPFabric HTTP workers schedule client handlers on the Minecraft executor and wa
 
 Pause releases all synthetic controls: movement, mining, navigation, item use, attack/use, and Baritone work—not just movement booleans—and emits `qc.pause`. [D-11] [D-35] Baritone documents that cancellation can leave an uncancelable movement finishing, so the hard-stop claim must be demonstrated with the actual mixins and client version. [Baritone cancellation](https://github.com/cabaletta/baritone/blob/25111daedf1d59e6a8dfb5a3e61885cdb8d953df/src/api/java/baritone/api/behavior/IPathingBehavior.java#L74-L105) [VERIFY] Distinguish physical from synthetic input and prove all four stop controls release the complete input set. [D-11] [D-38]
 
-Chat appears only when Jared types in-game himself (or uses operator-console `say <text>`) or the agent replies to another player's message. Activation, F8/manual takeover, stop/quit, lease expiry and disconnect produce no lifecycle chat. Code rejects `chat_say` / `chat_reply` unless the current request contains an incoming non-self `player`/`whisper` event in observation `recentChat` or pending `mustReply`; the system prompt also requires reply-only output. AI explanation when asked and allowlisted commands such as `/home` remain permitted. [D-47] [D-16] [D-29]
+Chat appears only when Jared types in-game himself (or uses operator-console `say <text>`) or the agent replies to an incoming non-self addressed message: `SirWaffleshnoz` (case-insensitive substring), `jared` (case-insensitive whole word), or any whisper. Activation, F8/manual takeover, stop/quit, lease expiry and disconnect produce no lifecycle chat. Code rejects `chat_say` / `chat_reply` with `chat is only for replying to a message that mentions you` unless the current request contains an incoming non-self `player` event with `mentionsMe=true` or a `whisper` in observation `recentChat` or pending `mustReply`; non-addressed context and historical chat alone are insufficient. The system prompt requires the same addressed-only replies. AI explanation when asked and allowlisted commands such as `/home` remain permitted. [D-48] [D-47] [D-16] [D-29]
 
 ## 8. Failure domains and recovery
 
@@ -180,7 +180,7 @@ The dead-man protects loss of the controller, not loss of the model while a heal
 
 | Read next | Contract ownership | Decisions |
 |---|---|---|
-| [00-decisions.md](00-decisions.md) | Operator adjudications and accepted tensions | [D-00]–[D-47] |
+| [00-decisions.md](00-decisions.md) | Operator adjudications and accepted tensions | [D-00]–[D-48] |
 | [20-companion-mod.md](20-companion-mod.md) | Java/Fabric baseline, RPC/event tables, tick ownership, guards, HUD, client session hooks | [D-08] [D-11] [D-13] [D-14] [D-23] [D-32] |
 | [30-controller.md](30-controller.md) | Tools/postconditions, observations, generation loop, heuristics, notes, console, outage policy | [D-04] [D-05] [D-07] [D-09] [D-20] [D-25] [D-33] |
 | [40-chat-and-safety.md](40-chat-and-safety.md) | Trust boundaries, disclosure, chat/command limits, build protection, stop precedence, account risk | [D-10] [D-11] [D-15] [D-16] [D-17] [D-18] [D-26] |

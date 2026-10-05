@@ -20,6 +20,8 @@ test('config validates keys and projects only the companion contract', () => {
   assert.deepEqual(Object.keys(toConfigApply(c)).sort(), ['chat','commandAllowlist','nicknames','protect','reflex']);
   assert.deepEqual(toConfigApply(c).reflex, {enabled: true, eatAtFood: 14});
   assert.deepEqual(toConfigApply(c).nicknames, {names: c.chat.nicknames, wholeWords: c.chat.wholeWords});
+  assert.deepEqual(c.chat.nicknames, ['SirWaffleshnoz']);
+  assert.deepEqual(c.chat.wholeWords, ['jared']);
   const dir = mkdtempSync(join(tmpdir(), 'qc-config-'));
   const path = join(dir, 'config.json');
   const input = JSON.parse(readFileSync(DEFAULT_CONFIG_PATH, 'utf8')) as Record<string, unknown>;
@@ -190,8 +192,9 @@ test('addressed whispers stay in mustReply until a successful private reply', {t
   } finally {allowReply.resolve(); await loop.close();}
 });
 
-test('chat tools require incoming player chat in the current request or a pending reply', {timeout: 5000}, async t => {
+for (const kind of ['player', 'whisper'] as const) test(`chat tools require addressed chat; ${kind} wakes and permits replies`, {timeout: 5000}, async t => {
   const config = loadConfig(DEFAULT_CONFIG_PATH);
+  config.home = null;
   const sent: string[] = [], results: unknown[] = [];
   const bridge: Bridge = {
     async health() {return true;},
@@ -216,13 +219,14 @@ test('chat tools require incoming player chat in the current request or a pendin
     async say(text) {await bridge.rpc('qc.chat.send', {text}); return {ok: true, summary: 'sent'};},
     async reply(to, text, privately) {
       assert.equal(to, 'Rcon'); assert.equal(privately, true);
-      await bridge.rpc('qc.chat.send', {text: `/msg ${to} ${text}`}); return {ok: true, summary: 'sent'};
+      await bridge.rpc('qc.chat.send', {text: kind === 'whisper' ? `/msg ${to} ${text}` : `${to}: ${text}`}); return {ok: true, summary: 'sent'};
     },
   };
   const afterRejected = Promise.withResolvers<void>(), afterAllowed = Promise.withResolvers<void>(), afterHistory = Promise.withResolvers<void>();
   const cancelled = Promise.withResolvers<never>();
   t.signal.addEventListener('abort', () => cancelled.reject(new Error('Reply-only chat regression cancelled')), {once: true});
   let requests = 0;
+  const allowedRequest = kind === 'whisper' ? 5 : 4;
   function propose(...names: Array<'chat_say' | 'chat_reply'>): LlmReply {
     return {content: null, reasoning: null, usage: {}, toolCalls: names.map((name, i) => ({
       id: `${requests}-${i}`, type: 'function', function: {name, arguments: JSON.stringify(name === 'chat_say' ? {text: 'Hello!'} : {to: 'Rcon', text: 'I am an AI agent.'})},
@@ -232,37 +236,53 @@ test('chat tools require incoming player chat in the current request or a pendin
     if (message.startsWith('Loop failure:')) cancelled.reject(new Error(message));
   }, record(kind, data) {if (kind === 'tool_result') results.push(data.result);}, llm: {
     async complete(messages) {
-      const current = messages.findLast(message => message.role === 'user' && typeof message.content === 'string');
-      assert.ok(current && current.role === 'user' && typeof current.content === 'string');
-      const payload = JSON.parse(current.content) as {wakeSources: string[]; mustReply: unknown[]; observation: {recentChat: unknown[]}};
-      requests++;
-      if (requests === 1) {
-        assert.ok(payload.wakeSources.includes('instruction'));
-        const prompt = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
-        assert.match(prompt, /Use chat_say\/chat_reply only to respond to another player's message/);
-        return propose('chat_say', 'chat_reply');
+      try {
+        const current = messages.findLast(message => message.role === 'user' && typeof message.content === 'string');
+        assert.ok(current && current.role === 'user' && typeof current.content === 'string');
+        const payload = JSON.parse(current.content) as {wakeSources: string[]; mustReply: unknown[]; observation: {recentChat: Array<{id: number}>}};
+        requests++;
+        if (requests === 1) {
+          assert.ok(payload.wakeSources.includes('instruction'));
+          assert.deepEqual(payload.observation.recentChat.map(event => event.id), [41, 40, 43]);
+          const prompt = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
+          assert.match(prompt, /Speak in chat only to answer messages in mustReply \(messages that mention SirWaffleshnoz or Jared, or whisper you\)/);
+          return propose('chat_say', 'chat_reply');
+        }
+        if (requests === 2) afterRejected.resolve();
+        if (requests === 3) {
+          assert.deepEqual(payload.wakeSources, ['chat']);
+          assert.equal(payload.observation.recentChat.length, 1); assert.equal(payload.mustReply.length, 1);
+          return kind === 'whisper' ? propose('chat_say') : propose('chat_say', 'chat_reply');
+        }
+        if (requests === 4 && kind === 'whisper') {
+          assert.deepEqual(payload.observation.recentChat, []); assert.equal(payload.mustReply.length, 1);
+          return propose('chat_reply');
+        }
+        if (requests === allowedRequest) {assert.deepEqual(payload.mustReply, []); afterAllowed.resolve();}
+        if (requests === allowedRequest + 1) return propose('chat_say');
+        if (requests === allowedRequest + 2) afterHistory.resolve();
+      } catch (error) {
+        cancelled.reject(error);
       }
-      if (requests === 2) afterRejected.resolve();
-      if (requests === 3) {assert.equal(payload.observation.recentChat.length, 1); return propose('chat_say');}
-      if (requests === 4) {
-        assert.deepEqual(payload.observation.recentChat, []); assert.equal(payload.mustReply.length, 1);
-        return propose('chat_reply');
-      }
-      if (requests === 5) {assert.deepEqual(payload.mustReply, []); afterAllowed.resolve();}
-      if (requests === 6) return propose('chat_say');
-      if (requests === 7) afterHistory.resolve();
       return {content: null, reasoning: null, toolCalls: [], usage: {}};
     },
   }});
-  const rejected = {ok: false, summary: "chat is only for replying to another player's message"};
+  const rejected = {ok: false, summary: "chat is only for replying to a message that mentions you"};
   try {
-    loop.instruction('collect logs'); loop.resume();
+    loop.wake('chat', {id: 40, kind: 'player', senderUuid: 'other', senderName: 'Rcon', text: 'Anyone online?', signed: false, mentionsMe: false, self: false});
+    assert.deepEqual(loop.status().pendingWakes, []);
+    loop.resume();
+    loop.wake('chat', {id: 41, kind: 'player', senderUuid: 'self', senderName: 'SirWaffleshnoz', text: 'SirWaffleshnoz is here.', signed: false, mentionsMe: true, self: true});
+    loop.wake('chat', {id: 43, kind: 'player', senderUuid: 'other', senderName: 'Rcon', text: 'Still nobody?', signed: false, mentionsMe: false, self: false});
+    await delay(20);
+    assert.equal(requests, 0); assert.deepEqual(loop.status().pendingWakes, []);
+    loop.instruction('collect logs');
     await Promise.race([afterRejected.promise, cancelled.promise]);
     assert.deepEqual(results, [rejected, rejected]); assert.deepEqual(sent, []);
-    loop.wake('chat', {id: 42, kind: 'whisper', senderUuid: null, senderName: 'Rcon', text: 'Hello! Are you an AI?', signed: false, mentionsMe: true, self: false});
+    loop.wake('chat', {id: 42, kind, senderUuid: null, senderName: 'Rcon', text: kind === 'player' ? 'SirWaffleshnoz, are you an AI?' : 'Hello! Are you an AI?', signed: false, mentionsMe: kind === 'player', self: false});
     await Promise.race([afterAllowed.promise, cancelled.promise]);
     assert.deepEqual(results.slice(2), [{ok: true, summary: 'sent', observedDelta: {}}, {ok: true, summary: 'sent', observedDelta: {}}]);
-    assert.deepEqual(sent, ['Hello!', '/msg Rcon I am an AI agent.']);
+    assert.deepEqual(sent, ['Hello!', kind === 'whisper' ? '/msg Rcon I am an AI agent.' : 'Rcon: I am an AI agent.']);
     loop.wake('instruction');
     await Promise.race([afterHistory.promise, cancelled.promise]);
     assert.deepEqual(results.at(-1), rejected); assert.equal(sent.length, 2);
