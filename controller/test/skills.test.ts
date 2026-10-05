@@ -1,14 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TOOLS, toolsForLlm, validateArguments } from "../tools.ts";
-import { MAX_PATH_FAILURES, blocksForItem, chooseRecipe, dropForBlock, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId } from "../skills.ts";
+import { MAX_PATH_FAILURES, blocksForItem, chooseRecipe, dropForBlock, executeSkill, goalSatisfied, inventoryDelta, isProtected, itemCount, itemId } from "../skills.ts";
 import type { Config, GameEvent, Notes, SkillEnv } from "../types.ts";
 
-const expected = "observe look_screenshot go_to go_to_player follow_player explore collect mine craft smelt place_block break_block equip eat attack chest_deposit chest_withdraw drop chat_say chat_reply run_command remember recall set_goal finish_goal wait stop harness_info".split(" ");
+const expected = "observe look_screenshot go_to go_to_player follow_player explore collect mine craft smelt place_block break_block equip eat attack chest_deposit chest_withdraw drop chat_say chat_reply run_command remember recall set_goal finish_goal stop harness_info".split(" ");
 
 test("curated registry and OpenAI schema contain exactly the operator-approved tools", () => {
   assert.deepEqual(TOOLS.map(t => t.name), expected);
-  assert.equal(new Set(TOOLS.map(t => t.name)).size, 28);
+  assert.equal(new Set(TOOLS.map(t => t.name)).size, 27);
+  assert.equal(TOOLS.some(tool => tool.name === "wait"), false);
   for (const tool of TOOLS) {
     assert.equal(tool.parameters.type, "object");
     assert.equal(tool.parameters.additionalProperties, false);
@@ -18,7 +19,7 @@ test("curated registry and OpenAI schema contain exactly the operator-approved t
     for (const property of Object.values(properties)) assert.ok(["string", "number", "integer", "boolean"].includes(String(property.type)));
   }
   const modelTools = toolsForLlm(TOOLS);
-  assert.equal(modelTools.length, 28);
+  assert.equal(modelTools.length, 27);
   assert.deepEqual(modelTools[0], { type: "function", function: { name: TOOLS[0]!.name, description: TOOLS[0]!.description, parameters: TOOLS[0]!.parameters } });
 });
 
@@ -51,6 +52,12 @@ test("drop mappings cover log variants, cobblestone and raw iron and reject unsu
   assert.equal(dropForBlock("iron_ore"), "minecraft:raw_iron");
   assert.equal(dropForBlock("deepslate_iron_ore"), "minecraft:raw_iron");
   assert.deepEqual(blocksForItem("raw_iron"), ["minecraft:iron_ore", "minecraft:deepslate_iron_ore"]);
+  for (const [ore, drop] of [["copper", "raw_copper"], ["lapis", "lapis_lazuli"], ["redstone", "redstone"]]) {
+    assert.equal(dropForBlock(`${ore}_ore`), `minecraft:${drop}`);
+    assert.equal(dropForBlock(`deepslate_${ore}_ore`), `minecraft:${drop}`);
+  }
+  assert.equal(dropForBlock("nether_gold_ore"), "minecraft:gold_nugget");
+  assert.equal(dropForBlock("ancient_debris"), "minecraft:ancient_debris");
   assert.equal(dropForBlock("oak_leaves"), null);
   assert.equal(dropForBlock("mod:ore"), null);
   assert.throws(() => itemId("oak log"), /invalid/);
@@ -203,7 +210,7 @@ test("a job that Baritone keeps retrying ends after repeated path failures inste
     events: {
       on(_type, fn) { listeners.push(fn); return () => {}; },
       async next(type) {
-        // Baritone reports a fresh calc_failed for the same task on every wait.
+        // Baritone reports a fresh calc_failed for the same task on every event poll.
         for (const fn of listeners) fn({ id: ++eventId, type, gameTime: 0, data: { taskId: "t1", kind: "goto", state: "calc_failed" } });
         return null;
       },
@@ -216,4 +223,68 @@ test("a job that Baritone keeps retrying ends after repeated path failures inste
   assert.equal(result.ok, false);
   assert.match(result.summary, new RegExp(`path calculation failed ${MAX_PATH_FAILURES} times in a row`));
   assert.equal(stopped, true);
+});
+
+function oreJob(pickaxe: string, options: {block?: string; stepMs?: number; moving?: boolean; acquireAt?: number; count?: number} = {}) {
+  let now = 0, stopped = false, started = false, scanned = false;
+  const unused = (): never => {throw new Error("unexpected test dependency");};
+  const env: SkillEnv = {
+    bridge: {health: async () => true, async rpc<T>(method: string): Promise<T> {
+      if (method === "perception.scan" || method === "perception.blocks") {scanned = true; throw new Error("ore scan must not be required");}
+      if (method === "qc.baritone.mine") started = true;
+      if (method === "qc.baritone.stop") stopped = true;
+      const responses: Record<string, unknown> = {
+        "player.getState": {x: options.moving ? now / 30000 : 0, y: 64, z: 0, dimension: "minecraft:overworld"},
+        "player.getInventory": {selectedSlot: 0, hotbar: [{id: `minecraft:${pickaxe}_pickaxe`, count: 1, slot: 0},
+          ...(now >= (options.acquireAt ?? Infinity) ? [{id: dropForBlock(options.block ?? "iron_ore"), count: options.count ?? 1, slot: 1}] : [])], main: [], armor: [], offhand: {}},
+        "qc.baritone.mine": {started: true, taskId: "ore-task"}, "qc.baritone.status": {active: started && !stopped, taskId: "ore-task"},
+        "qc.baritone.stop": {stopped: true},
+      };
+      return (responses[method] ?? {}) as T;
+    }},
+    config: {home: null, selfGoal: {radius: 256}, protect: {naturalBlocks: [itemId(options.block ?? "iron_ore"), "minecraft:deepslate_iron_ore"], zones: []}} as unknown as Config,
+    notes: {get: () => ({home: [0,64,0], zones: [], places: []}), update: unused},
+    events: {on() {return () => {};}, async next() {now += options.stepMs ?? 45000; return null;}},
+    chat: {route: unused, say: unused, reply: unused}, signal: new AbortController().signal, log() {},
+  };
+  return {env, now: () => now, state: () => ({stopped, started, scanned})};
+}
+
+test("ore mining needs a sufficient pickaxe but no nearby scanned ore", async () => {
+  for (const pickaxe of ["wooden", "golden", "stone", "iron", "diamond", "netherite"]) {
+    const job = oreJob(pickaxe, {acquireAt: 45000});
+    const answer = await executeSkill("mine", {block: "iron_ore", count: 1}, job.env, job.now);
+    const sufficient = !["wooden", "golden"].includes(pickaxe);
+    assert.equal(answer.ok, sufficient);
+    assert.equal(job.state().started, sufficient); assert.equal(job.state().scanned, false);
+    if (!sufficient) assert.equal(answer.summary, "need a stone pickaxe or better to mine minecraft:iron_ore");
+  }
+});
+
+test("a variable-yield ore succeeds from its actual drop inventory delta", async () => {
+  const job = oreJob("stone", {block: "lapis_ore", acquireAt: 45000, count: 9});
+  const answer = await executeSkill("mine", {block: "lapis_ore", count: 1}, job.env, job.now);
+  assert.equal(answer.ok, true); assert.equal(answer.summary, "Acquired 9 minecraft:lapis_lazuli");
+  assert.equal(job.state().scanned, false);
+});
+
+test("a mining job with no position or target-inventory progress stops after 45 seconds", async () => {
+  const job = oreJob("stone");
+  const answer = await executeSkill("collect", {item: "raw_iron", count: 1}, job.env, job.now);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.summary, "stalled: no movement or inventory change for 45 s");
+  assert.equal(job.now(), 45000); assert.equal(job.state().stopped, true);
+});
+
+test("ore budgets use the five-minute floor, forty seconds per item and fifteen-minute ceiling", async () => {
+  for (const [count, budget] of [[1,300000], [10,400000], [30,900000]] as const) {
+    const job = oreJob("stone", {stepMs: 10000, moving: true, acquireAt: budget - 10000, count});
+    const answer = await executeSkill("collect", {item: "raw_iron", count}, job.env, job.now);
+    assert.equal(answer.ok, true, answer.summary);
+    assert.equal(job.now(), budget - 10000);
+    const expired = oreJob("stone", {stepMs: 10000, moving: true});
+    const failure = await executeSkill("mine", {block: "iron_ore", count}, expired.env, expired.now);
+    assert.equal(failure.ok, false); assert.equal(expired.now(), budget);
+    assert.equal(expired.state().stopped, true);
+  }
 });

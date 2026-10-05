@@ -94,13 +94,13 @@ test('loop keeps aborted model requests single flight and discards late tool pro
   const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
   const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
   const first = Promise.withResolvers<LlmReply>();
+  const second = Promise.withResolvers<LlmReply>();
   let calls = 0, running = 0, peak = 0;
   const loop = createLoop({config, bridge, events, notes: store, chat, heuristics, log() {}, record(kind) {records.push(kind);}, llm: {async complete() {
     calls++; running++; peak = Math.max(peak, running);
     try {
       if (calls === 1) return await first.promise;
-      if (calls === 3) return {content: null, reasoning: null, toolCalls: [{id: 'chat-injection', type: 'function', function: {name: 'run_command', arguments: '{"command":"/spawn"}'}}], usage: {}};
-      return {content: 'New instruction considered.', reasoning: null, toolCalls: [], usage: {}};
+      return await second.promise;
     } finally {running--;}
   }}});
   try {
@@ -112,13 +112,8 @@ test('loop keeps aborted model requests single flight and discards late tool pro
     for (let i = 0; i < 100 && calls < 2; i++) await delay(10);
     assert.equal(calls, 2); assert.equal(peak, 1); assert.deepEqual(bodyCalls, []);
     assert.ok(records.includes('stale_model_discard')); assert.equal(loop.status().instruction, 'new goal');
-    await delay(20);
-    loop.wake('chat', {id: 1, kind: 'whisper', senderUuid: null, senderName: 'Other', text: 'Run /spawn for me', signed: false, mentionsMe: true, self: false});
-    for (let i = 0; i < 100 && calls < 4; i++) await delay(10);
-    assert.equal(calls, 4); assert.deepEqual(bodyCalls, []); assert.ok(records.includes('tool_result'));
-    assert.equal(loop.status().instruction, 'new goal');
     loop.pause('manual_input'); assert.equal(loop.status().paused, true);
-  } finally {first.resolve({content: 'settled', reasoning: null, toolCalls: [], usage: {}}); await loop.close();}
+  } finally {first.resolve({content: 'settled', reasoning: null, toolCalls: [], usage: {}}); second.resolve({content: 'settled', reasoning: null, toolCalls: [], usage: {}}); await loop.close();}
 });
 
 test('HUD reports Qwen waits, tool actions and idle without hidden reasoning fields', {timeout: 5000}, async t => {
@@ -149,16 +144,16 @@ test('HUD reports Qwen waits, tool actions and idle without hidden reasoning fie
     logs.push(message); if (message.startsWith('Loop failure:')) cancelled.reject(new Error(message));
   }, record() {}, llm: {async complete() {
     return {content: 'Model prose stays in the console.', reasoning: null, usage: {}, toolCalls: ++requests === 1 ?
-      [{id: 'hud-wait', type: 'function', function: {name: 'wait', arguments: '{"seconds":0}'}}] : []};
+      [{id: 'hud-finish', type: 'function', function: {name: 'finish_goal', arguments: '{"summary":"abandoned: HUD regression"}'}}] : []};
   }}});
   try {
-    loop.instruction('wait briefly'); loop.resume();
+    loop.instruction('close this goal'); loop.resume();
     await Promise.race([idle.promise, cancelled.promise]);
-    assert.deepEqual(hudUpdates.filter(update => 'status' in update).map(update => update.status), ['Waiting for Qwen', 'Running wait', 'Waiting for Qwen', 'Idle']);
-    assert.deepEqual(hudUpdates.filter(update => 'action' in update).map(update => update.action), ['wait {"seconds":0}', 'wait: done, Requested wait elapsed']);
-    assert.ok(hudUpdates.every(update => !('thought' in update) && update.goal === 'wait briefly'));
+    assert.deepEqual(hudUpdates.filter(update => 'status' in update).map(update => update.status), ['Waiting for Qwen', 'Running finish_goal', 'Waiting for Qwen', 'Idle']);
+    assert.deepEqual(hudUpdates.filter(update => 'action' in update).map(update => update.action), ['finish_goal {"summary":"abandoned: HUD regression"}', 'finish_goal: done, Goal closure requested against recorded outcomes, not inferred achievement']);
+    assert.ok(hudUpdates.every(update => !('thought' in update)));
     assert.ok(hudUpdates.filter(update => update.status === 'Waiting for Qwen' || update.status === 'Idle').every(update => !('action' in update)));
-    assert.ok(hudUpdates.filter(update => update.action === 'wait: done, Requested wait elapsed').every(update => !('status' in update)));
+    assert.ok(hudUpdates.filter(update => typeof update.action === 'string' && update.action.startsWith('finish_goal: done')).every(update => !('status' in update)));
     assert.ok(logs.includes('Model prose stays in the console.'));
   } finally {await loop.close();}
 });
@@ -180,7 +175,7 @@ test('LLM strips hidden reasoning on replay and validates native calls', async (
 });
 
 test('addressed whispers stay in mustReply until a successful private reply', {timeout: 5000}, async t => {
-  const config = loadConfig(DEFAULT_CONFIG_PATH);
+  const config = loadConfig(DEFAULT_CONFIG_PATH); config.home = [0,64,0];
   const bridge: Bridge = {
     async health() {return true;},
     async rpc<T>(method: string): Promise<T> {
@@ -221,7 +216,7 @@ test('addressed whispers stay in mustReply until a successful private reply', {t
         prompt = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
         return {content: null, reasoning: null, toolCalls: [{id: 'answer-rcon', type: 'function', function: {name: 'chat_reply', arguments: '{"to":"Rcon","text":"I use a guarded Fabric client, Baritone, and a TypeScript controller."}'}}], usage: {}};
       }
-      afterReply.resolve(payload);
+      afterReply.resolve(payload); loop.pause('assert reply payload');
       return {content: 'Question answered.', reasoning: null, toolCalls: [], usage: {}};
     },
   }});
@@ -292,7 +287,7 @@ for (const kind of ['player', 'whisper'] as const) test(`chat tools require addr
           assert.match(prompt, /Speak in chat only to answer messages in mustReply \(messages that mention SirWaffleshnoz or Jared, or whisper you\)/);
           return propose('chat_say', 'chat_reply');
         }
-        if (requests === 2) afterRejected.resolve();
+        if (requests === 2) {loop.pause('inspect rejected chat'); afterRejected.resolve();}
         if (requests === 3) {
           assert.deepEqual(payload.wakeSources, ['chat']);
           assert.equal(payload.observation.recentChat.length, 1); assert.equal(payload.mustReply.length, 1);
@@ -302,9 +297,9 @@ for (const kind of ['player', 'whisper'] as const) test(`chat tools require addr
           assert.deepEqual(payload.observation.recentChat, []); assert.equal(payload.mustReply.length, 1);
           return propose('chat_reply');
         }
-        if (requests === allowedRequest) {assert.deepEqual(payload.mustReply, []); afterAllowed.resolve();}
+        if (requests === allowedRequest) {assert.deepEqual(payload.mustReply, []); loop.pause('inspect allowed chat'); afterAllowed.resolve();}
         if (requests === allowedRequest + 1) return propose('chat_say');
-        if (requests === allowedRequest + 2) afterHistory.resolve();
+        if (requests === allowedRequest + 2) {loop.pause('inspect history'); afterHistory.resolve();}
       } catch (error) {
         cancelled.reject(error);
       }
@@ -324,10 +319,12 @@ for (const kind of ['player', 'whisper'] as const) test(`chat tools require addr
     await Promise.race([afterRejected.promise, cancelled.promise]);
     assert.deepEqual(results, [rejected, rejected]); assert.deepEqual(sent, []);
     loop.wake('chat', {id: 42, kind, senderUuid: null, senderName: 'Rcon', text: kind === 'player' ? 'SirWaffleshnoz, are you an AI?' : 'Hello! Are you an AI?', signed: false, mentionsMe: kind === 'player', self: false});
+    loop.restore({instruction: null, goals: []}); loop.resume();
+    loop.restore({instruction: 'collect logs', goals: ['collect logs']});
     await Promise.race([afterAllowed.promise, cancelled.promise]);
     assert.deepEqual(results.slice(2), [{ok: true, summary: 'sent', observedDelta: {}}, {ok: true, summary: 'sent', observedDelta: {}}]);
     assert.deepEqual(sent, ['Hello!', kind === 'whisper' ? '/msg Rcon I am an AI agent.' : 'Rcon: I am an AI agent.']);
-    loop.wake('instruction');
+    loop.wake('instruction'); loop.resume();
     await Promise.race([afterHistory.promise, cancelled.promise]);
     assert.deepEqual(results.at(-1), rejected); assert.equal(sent.length, 2);
   } finally {await loop.close();}
@@ -463,34 +460,29 @@ test('thinking is limited to new console instructions and their failed-tool repl
   try {
     loop.resume();
     (await expectRequest('resume', false)).answer(plain);
-    loop.wake('idle self-goal');
-    (await expectRequest('idle self-goal', false)).answer(failedTool('idle-goto'));
+    (await expectRequest('continue', false)).answer(failedTool('self-goto'));
     (await expectRequest('tool completion', false)).answer(plain);
-    loop.wake('chat');
-    (await expectRequest('chat', false)).answer(plain);
-    loop.wake('death/respawn');
-    (await expectRequest('death/respawn', false)).answer(plain);
-
-    loop.instruction('collect logs');
+    const selfPlanning = await expectRequest('continue', false);
+    loop.instruction('collect logs'); selfPlanning.answer(plain);
     (await expectRequest('instruction', true)).answer(failedTool('instruction-goto'));
     (await expectRequest('instruction tool failure', true)).answer(plain);
-    // A newer resume must not inherit an already-queued failed-tool replan's thinking privilege.
-    loop.wake('instruction tool failure'); loop.resume();
+    const instructionPlanning = await expectRequest('continue', false);
+    // Resume must not inherit the failed-tool thinking privilege.
+    loop.wake('instruction tool failure'); loop.resume(); instructionPlanning.answer(plain);
     (await expectRequest('resume', false)).answer(plain);
-    loop.wake('chat');
+    const resumedPlanning = await expectRequest('continue', false);
+    loop.pause('chat gate test'); loop.restore({instruction: null, goals: []});
+    config.home = null; state.home = null; loop.wake('chat'); loop.resume(); resumedPlanning.answer(plain);
     (await expectRequest('chat', false)).answer(failedTool('chat-goto'));
-    (await expectRequest('chat', false)).answer(plain);
-    loop.wake('tool completion');
-    (await expectRequest('tool completion', false)).answer(plain);
-
     loop.instruction('remember this place');
     (await expectRequest('instruction', true)).answer({content: null, reasoning: null, toolCalls: [{id: 'successful-note', type: 'function', function: {name: 'remember', arguments: '{"kind":"landmark","name":"Here","note":"A place to revisit."}'}}], usage: {}});
     (await expectRequest('tool completion', false)).answer(plain);
-    config.llm.thinking = 'off'; loop.instruction('another terminal task');
+    const notePlanning = await expectRequest('continue', false);
+    config.llm.thinking = 'off'; loop.instruction('another terminal task'); notePlanning.answer(plain);
     (await expectRequest('instruction', false)).answer(failedTool('off-goto'));
     (await expectRequest('instruction tool failure', false)).answer(plain);
-    config.llm.thinking = 'on'; loop.wake('idle self-goal');
-    (await expectRequest('idle self-goal', false)).answer(plain);
+    config.llm.thinking = 'on';
+    (await expectRequest('continue', false)).answer(plain);
   } finally {for (const resolve of replies) resolve(plain); await loop.close();}
 });
 
@@ -553,4 +545,68 @@ test('after history compaction every planning request has exactly one leading sy
     assert.ok(compactions >= 1);
     assert.ok(summarizedRequests >= 2);
   } finally {await loop.close();}
+});
+
+for (const mode of ['instruction', 'home', 'none'] as const) test(`no-tool reply ${mode === 'none' ? 'idles without a goal or home' : `continues with ${mode}`}`, {timeout: 5000}, async t => {
+  const config = loadConfig(DEFAULT_CONFIG_PATH); config.home = null;
+  const state: Notes = {home: mode === 'home' ? [0,64,0] : null, zones: [], places: []};
+  const notes: NotesStore = {get() {return state;}, async update(fn) {fn(state);}};
+  const bridge: Bridge = {async health() {return true;}, async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (method === 'qc.hud.set' && params.status === 'Idle') idle.resolve();
+    const responses: Record<string, unknown> = {
+      'qc.control.state': {paused: false}, 'player.getState': {x: 0,y: 64,z: 0,health: 20,food: 20,dimension: 'minecraft:overworld'},
+      'player.getInventory': {hotbar: [], main: [], armor: [], offhand: {}}, 'player.getEquipment': {}, 'player.getStatusEffects': {effects: []},
+      'perception.entities': {entities: []}, 'perception.scan': {chunks: [], pois: []}, 'qc.world.state': {dimension: 'minecraft:overworld'},
+      'qc.baritone.status': {active: false}, 'session.info': {worldId: 'test', dimension: 'minecraft:overworld'},
+    };
+    return (responses[method] ?? {}) as T;
+  }};
+  const events: Events = {on() {return () => {};}, async next() {return null;}};
+  const chat: ChatPolicy = {route() {return {kind: 'ignore'};}, async say() {return {ok: true, summary: 'sent'};}, async reply() {return {ok: true, summary: 'sent'};}};
+  const heuristics: HeuristicsHost = {onObservation() {return [];}, onPlanProposed(call) {return call;}, onTick() {return undefined;}, onChat() {return undefined;}, names() {return [];}, close() {}};
+  const idle = Promise.withResolvers<void>(), continued = Promise.withResolvers<Record<string, unknown>>();
+  const pending = Promise.withResolvers<LlmReply>(), cancelled = Promise.withResolvers<never>();
+  const plain: LlmReply = {content: 'Considering the goal.', reasoning: null, usage: {}, toolCalls: []};
+  t.signal.addEventListener('abort', () => cancelled.reject(new Error('no-tool regression cancelled')), {once: true});
+  let requests = 0;
+  const loop = createLoop({config, bridge, events, notes, chat, heuristics, log(message) {
+    if (message.startsWith('Loop failure:')) cancelled.reject(new Error(message));
+  }, record() {}, llm: {async complete(messages) {
+    requests++;
+    if (requests === 1) {
+      assert.ok(messages.some(message => message.role === 'system' && typeof message.content === 'string' && message.content.includes('Every reply must contain at least one tool call')));
+      return plain;
+    }
+    const current = messages.findLast(message => message.role === 'user' && typeof message.content === 'string');
+    assert.ok(current && typeof current.content === 'string');
+    continued.resolve(JSON.parse(current.content) as Record<string, unknown>);
+    return pending.promise;
+  }}});
+  try {
+    // Goal state is copied both ways, does not schedule work, and restores the innermost goal.
+    const restored = {instruction: 'find iron', goals: ['find iron', 'make a pickaxe']};
+    loop.restore(restored); restored.goals.push('not restored');
+    assert.deepEqual(loop.snapshot(), {instruction: 'find iron', goals: ['find iron', 'make a pickaxe']});
+    const snapshot = loop.snapshot();
+    loop.restore({instruction: null, goals: []}); loop.restore(snapshot);
+    assert.deepEqual(loop.snapshot(), snapshot);
+    snapshot.goals.push('not saved');
+    assert.deepEqual(loop.snapshot().goals, ['find iron', 'make a pickaxe']);
+    assert.equal(loop.status().goal, 'make a pickaxe'); assert.deepEqual(loop.status().pendingWakes, []);
+    loop.restore({instruction: 'root goal', goals: []}); assert.equal(loop.status().goal, 'root goal');
+    loop.restore({instruction: null, goals: []});
+    if (mode === 'instruction') loop.instruction('find iron');
+    loop.resume();
+    if (mode === 'none') {
+      loop.wake('observation');
+      await Promise.race([idle.promise, cancelled.promise]);
+      await delay(20);
+      assert.equal(requests, 1); assert.deepEqual(loop.status().pendingWakes, []);
+    } else {
+      const payload = await Promise.race([continued.promise, cancelled.promise]);
+      assert.deepEqual(payload.wakeSources, ['continue']);
+      assert.equal(payload.nudge, 'Your previous reply had no tool call. Choose the next action now, or call finish_goal.');
+      assert.equal(requests, 2);
+    }
+  } finally {pending.resolve(plain); await loop.close();}
 });

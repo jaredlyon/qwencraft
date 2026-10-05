@@ -39,6 +39,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 
 import java.net.InetSocketAddress;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -74,6 +75,31 @@ public final class BaritoneFeature {
 		}
 	}
 
+	private static final class BlockLookupList extends AbstractList<Block> {
+		private final Block[] blocks;
+		private final Set<Block> lookup;
+
+		BlockLookupList(List<Block> blocks) {
+			this.blocks = blocks.toArray(Block[]::new);
+			this.lookup = new HashSet<>(blocks);
+		}
+
+		@Override
+		public Block get(int index) {
+			return blocks[index];
+		}
+
+		@Override
+		public int size() {
+			return blocks.length;
+		}
+
+		@Override
+		public boolean contains(Object block) {
+			return lookup.contains(block);
+		}
+	}
+
 	private BaritoneFeature() {}
 
 	public static void init() {
@@ -85,7 +111,7 @@ public final class BaritoneFeature {
 				BaritoneFeature.onMain(() -> pathEvent(event));
 			}
 		});
-		applySettingsNow();
+		applySettingsNow(true);
 		QcState.onConfig(BaritoneFeature::applySettings);
 		QcState.onPause(() -> onMain(BaritoneFeature::cancelEverything));
 
@@ -120,14 +146,34 @@ public final class BaritoneFeature {
 				throw RpcException.badRequest("targetCount must be a positive integer");
 			}
 			String[] ids = new String[blocks.size()];
+			boolean allOres = true;
 			for (int i = 0; i < ids.length; i++) {
 				Identifier id = Identifier.tryParse(blocks.get(i));
 				if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) {
 					throw RpcException.badRequest("unknown block: " + blocks.get(i));
 				}
 				ids[i] = id.toString();
+				if (!id.getPath().endsWith("_ore") && !ids[i].equals("minecraft:ancient_debris")) allOres = false;
 			}
-			return start("mine", baritone.getMineProcess(), () -> baritone.getMineProcess().mineByName((int)count, ids));
+			boolean legitMine = allOres;
+			return start("mine", baritone.getMineProcess(), () -> {
+				Settings settings = BaritoneAPI.getSettings();
+				settings.legitMine.value = legitMine;
+				if (legitMine) {
+					String mineral = ids[0].substring(ids[0].indexOf(':') + 1);
+					if (mineral.startsWith("deepslate_")) mineral = mineral.substring("deepslate_".length());
+					settings.legitMineYLevel.value = switch (mineral) {
+						case "coal_ore" -> 96;
+						case "copper_ore" -> 48;
+						case "iron_ore" -> 16;
+						case "gold_ore" -> -16;
+						case "redstone_ore", "diamond_ore" -> -58;
+						case "lapis_ore" -> 0;
+						default -> Minecraft.getInstance().player.getBlockY();
+					};
+				}
+				baritone.getMineProcess().mineByName((int)count, ids);
+			});
 		}));
 		Qc.register("qc.baritone.follow", ctx -> Qc.onMain(() -> {
 			requireWork();
@@ -213,16 +259,19 @@ public final class BaritoneFeature {
 	}
 
 	public static void applySettings() {
-		onMain(BaritoneFeature::applySettingsNow);
+		onMain(() -> applySettingsNow(false));
 	}
 
-	private static void applySettingsNow() {
+	private static void applySettingsNow(boolean initialize) {
 		Settings settings = BaritoneAPI.getSettings();
 		settings.allowBreak.value = true;
 		settings.allowPlace.value = true;
 		settings.allowSprint.value = true;
 		settings.allowParkour.value = true;
-		settings.legitMine.value = false;
+		if (initialize) {
+			settings.legitMine.value = true;
+			settings.legitMineYLevel.value = 16;
+		}
 		settings.chatControl.value = false;
 		settings.prefixControl.value = false;
 		// Baritone prints status/failure lines into the local chat HUD; send them to the game log instead.
@@ -232,7 +281,7 @@ public final class BaritoneFeature {
 		for (Block block : BuiltInRegistries.BLOCK) {
 			if (!allowed.contains(BuiltInRegistries.BLOCK.getKey(block).toString())) disallowed.add(block);
 		}
-		settings.blocksToDisallowBreaking.value = disallowed;
+		settings.blocksToDisallowBreaking.value = new BlockLookupList(disallowed);
 	}
 
 	private static void requireWork() throws RpcException {

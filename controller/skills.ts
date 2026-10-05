@@ -55,8 +55,12 @@ export function goalSatisfied(p: Vec3, args: ObjectValue): boolean {
 const drops: Record<string, string> = {
   stone: "cobblestone", deepslate: "cobbled_deepslate", grass_block: "dirt", podzol: "dirt", mycelium: "dirt",
   coal_ore: "coal", deepslate_coal_ore: "coal", iron_ore: "raw_iron", deepslate_iron_ore: "raw_iron",
+  copper_ore: "raw_copper", deepslate_copper_ore: "raw_copper",
+  lapis_ore: "lapis_lazuli", deepslate_lapis_ore: "lapis_lazuli",
+  redstone_ore: "redstone", deepslate_redstone_ore: "redstone",
   gold_ore: "raw_gold", deepslate_gold_ore: "raw_gold", diamond_ore: "diamond", deepslate_diamond_ore: "diamond",
   emerald_ore: "emerald", deepslate_emerald_ore: "emerald", nether_quartz_ore: "quartz",
+  nether_gold_ore: "gold_nugget", ancient_debris: "ancient_debris",
 };
 const selfDrops = new Set(["granite", "diorite", "andesite", "dirt", "coarse_dirt", "cobblestone", "sand", "red_sand", "bamboo_block", "mud", "mangrove_roots"]);
 for (const tree of ["oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "pale_oak", "poplar", "cherry", "mangrove"]) {
@@ -106,18 +110,19 @@ class Skill {
   cursorOrigin: number | null = null;
   cursorUnknown = false;
   observed: ObjectValue = {};
-  constructor(env: SkillEnv, budget = 120000) { this.env = env; this.deadline = Date.now() + budget; }
+  now: () => number;
+  constructor(env: SkillEnv, budget = 120000, now = Date.now) { this.env = env; this.now = now; this.deadline = now() + budget; }
   check(): void {
     if (this.env.signal.aborted) throw new Error("interrupted");
-    if (Date.now() > this.deadline) throw new Error("skill timed out");
+    if (this.now() > this.deadline) throw new Error("skill timed out");
   }
   async rpc(method: string, params: ObjectValue = {}): Promise<ObjectValue> {
     this.check();
-    const value = object(await this.env.bridge.rpc(method, params, { signal: this.env.signal, timeoutMs: Math.max(1, Math.min(10000, this.deadline - Date.now())) }));
+    const value = object(await this.env.bridge.rpc(method, params, { signal: this.env.signal, timeoutMs: Math.max(1, Math.min(10000, this.deadline - this.now())) }));
     this.check();
     return value;
   }
-  async sleep(ms = 250): Promise<void> { this.check(); await delay(Math.min(ms, Math.max(1, this.deadline - Date.now())), undefined, { signal: this.env.signal }); this.check(); }
+  async sleep(ms = 250): Promise<void> { this.check(); await delay(Math.min(ms, Math.max(1, this.deadline - this.now())), undefined, { signal: this.env.signal }); this.check(); }
   async inventory(): Promise<ObjectValue> { return this.rpc("player.getInventory"); }
   async player(): Promise<ObjectValue> { return this.rpc("player.getState"); }
   homeTarget(p: Vec3): void { if (!withinHome(this.env.config, this.env.notes.get() as Notes, p)) throw new Error("home radius exceeded"); }
@@ -133,7 +138,7 @@ class Skill {
     if (!block || block.loaded !== true) throw new Error("target block not loaded");
     return block;
   }
-  async job(method: string, params: ObjectValue, success: () => Promise<boolean>, timeout = 120000): Promise<boolean> {
+  async job(method: string, params: ObjectValue, success: () => Promise<boolean>, timeout = 120000, targetCount?: () => number): Promise<boolean> {
     let early: ObjectValue | null = null;
     // Consecutive calc_failed events per task, reset by at_goal. Baritone's mine process retries forever by
     // blacklisting one unreachable ore at a time, so a stuck mine must be ended here instead of at the timeout.
@@ -152,13 +157,18 @@ class Skill {
       if (started.started !== true) throw new Error("task did not start");
       taskId = string(started.taskId);
       this.observed.taskId = taskId;
-      const end = Math.min(this.deadline, Date.now() + timeout);
-      const initialDimension = string((await this.player()).dimension);
-      while (Date.now() < end) {
+      const end = Math.min(this.deadline, this.now() + timeout);
+      const initial = await this.player(), initialDimension = string(initial.dimension);
+      let progressPosition = pos(initial), progressCount: number | undefined, progressAt = this.now();
+      while (this.now() < end) {
         this.check();
         const player = await this.homePosition();
         if (player.dimension !== initialDimension) throw new Error("movement interrupted: dimension changed");
         if (await success()) return true;
+        const count = targetCount ? targetCount() : inventoryStacks(await this.inventory()).reduce((sum, stack) => sum + number(stack.count), 0);
+        if (distance(pos(player), progressPosition) >= 1 || count !== progressCount) {
+          progressPosition = pos(player); progressCount = count; progressAt = this.now();
+        } else if (this.now() - progressAt >= 45000) throw new Error("stalled: no movement or inventory change for 45 s");
         if ((failures.get(taskId) ?? 0) >= MAX_PATH_FAILURES) {
           throw new Error(`no reachable target: path calculation failed ${MAX_PATH_FAILURES} times in a row (protected blocks or terrain in the way); try somewhere else`);
         }
@@ -171,7 +181,7 @@ class Skill {
         }
         const event = await this.env.events.next("qc.task", e => {
           try { return object(e.data).taskId === taskId; } catch { return false; }
-        }, Math.min(500, end - Date.now()), this.env.signal);
+        }, Math.min(500, end - this.now()), this.env.signal);
         if (event) early = object(event.data);
       }
       return false;
@@ -315,13 +325,31 @@ function result(ok: boolean, summary: string, observedDelta: unknown = {}): Tool
 async function acquisition(s: Skill, blocks: string[], id: string, count: number): Promise<ToolResult> {
   if (!blocks.length) throw new Error("drop mapping unsupported");
   if (blocks.some(b => !s.env.config.protect.naturalBlocks.includes(b))) throw new Error("protected block");
-  const scan = await s.rpc("perception.scan", { radius: 3, find: blocks, findLimit: 64 });
-  const candidates = list(scan.found).filter(b => !isProtected(s.env.config, s.env.notes.get(), string(b.id), pos(b)));
-  if (!candidates.length) throw new Error("resource not found");
-  s.homeTarget(pos(candidates[0]!));
-  const probe = await s.block(pos(candidates[0]!), true);
-  if (probe.canHarvest !== true) throw new Error("cannot harvest");
-  await s.rpc("inventory.selectHotbar", { slot: number(probe.bestSlot) });
+  if (blocks.some(block => block.endsWith("_ore"))) s.deadline = s.now() + Math.min(900000, Math.max(300000, count * 40000));
+  const ore = blocks.every(block => block.endsWith("_ore") || block === "minecraft:ancient_debris");
+  if (ore) {
+    const tiers: Record<string, number> = {wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4};
+    const required = Math.max(...blocks.map(block => block === "minecraft:ancient_debris" ? 3 :
+      /(?:gold|redstone|diamond|emerald)_ore$/.test(block) && block !== "minecraft:nether_gold_ore" ? 2 :
+      /(?:coal|nether_gold|nether_quartz)_ore$/.test(block) ? 0 : 1));
+    const inventory = await s.inventory();
+    const best = inventoryStacks(inventory).flatMap(stack => {
+      const match = typeof stack.id === "string" ? /^minecraft:(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/.exec(stack.id) : null;
+      return match && number(stack.count) > 0 ? [{slot: number(stack.slot), tier: tiers[match[1]!]!}] : [];
+    }).sort((a, b) => b.tier - a.tier)[0];
+    if (!best || best.tier < required) throw new Error(`need a ${["wooden", "stone", "iron", "diamond"][required]} pickaxe or better to mine ${blocks[0]}`);
+    const selected = number(inventory.selectedSlot);
+    if (best.slot > 8) await s.rpc("inventory.swapSlots", {slotA: best.slot, slotB: selected});
+    else await s.rpc("inventory.selectHotbar", {slot: best.slot});
+  } else {
+    const scan = await s.rpc("perception.scan", { radius: 3, find: blocks, findLimit: 64 });
+    const candidates = list(scan.found).filter(b => !isProtected(s.env.config, s.env.notes.get(), string(b.id), pos(b)));
+    if (!candidates.length) throw new Error("resource not found");
+    s.homeTarget(pos(candidates[0]!));
+    const probe = await s.block(pos(candidates[0]!), true);
+    if (probe.canHarvest !== true) throw new Error("cannot harvest");
+    await s.rpc("inventory.selectHotbar", { slot: number(probe.bestSlot) });
+  }
   const before = await s.inventory(), start = itemCount(before, id), targetCount = start + count;
   if (!Number.isSafeInteger(targetCount)) throw new Error("invalid final inventory count");
   let after = before;
@@ -329,7 +357,7 @@ async function acquisition(s: Skill, blocks: string[], id: string, count: number
     after = await s.inventory();
     s.observed.acquisition = { item: id, before: start, after: itemCount(after, id), acquired: inventoryDelta(before, after, id), targetCount };
     return inventoryDelta(before, after, id) >= count;
-  });
+  }, Math.max(120000, s.deadline - s.now()), () => itemCount(after, id));
   return result(ok, ok ? `Acquired ${inventoryDelta(before, after, id)} ${id}` : "mining failed", s.observed);
 }
 async function place(s: Skill, id: string, p: Vec3, face: string): Promise<ToolResult> {
@@ -686,11 +714,6 @@ async function dispatch(name: string, args: ObjectValue, s: Skill): Promise<Tool
       outcomes.delete(env.bridge);
       return result(true, "Goal closure requested against recorded outcomes, not inferred achievement", { goalFinished: summary, evidence: recorded.map(r => ({ summary: r.summary, observedDelta: r.observedDelta })) });
     }
-    case "wait": {
-      const started = Date.now();
-      await s.sleep(number(args.seconds) * 1000);
-      return result(true, "Requested wait elapsed", { elapsedMs: Date.now() - started });
-    }
     case "stop": {
       const failed = await stopMotion(env);
       const task = await s.rpc("qc.baritone.status"), player = await s.player(), snap = await tickSnapshot(env);
@@ -708,10 +731,9 @@ async function dispatch(name: string, args: ObjectValue, s: Skill): Promise<Tool
 }
 function itemIdSafe(value: string): string | null { try { return itemId(value); } catch { return null; } }
 
-export async function executeSkill(name: string, args: ObjectValue, env: SkillEnv): Promise<ToolResult> {
-  const seconds = name === "wait" ? number(args.seconds) : 0;
-  const s = new Skill(env, name === "wait" ? seconds * 1000 + 5000 : name === "smelt" ? Math.max(120000, number(args.count) * 12000 + 30000) : 120000);
-  const body = !["observe", "look_screenshot", "chat_say", "chat_reply", "remember", "recall", "set_goal", "finish_goal", "wait", "harness_info"].includes(name);
+export async function executeSkill(name: string, args: ObjectValue, env: SkillEnv, now = Date.now): Promise<ToolResult> {
+  const s = new Skill(env, name === "smelt" ? Math.max(120000, number(args.count) * 12000 + 30000) : 120000, now);
+  const body = !["observe", "look_screenshot", "chat_say", "chat_reply", "remember", "recall", "set_goal", "finish_goal", "harness_info"].includes(name);
   try {
     s.check();
     const answer = await dispatch(name, args, s);

@@ -5,6 +5,7 @@ mod/run/
 controller/node_modules/
 controller/logs/
 notes.json
+controller-restart.json
 bench/server/
 bench/logs/
 vendor/*.jar

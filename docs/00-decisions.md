@@ -278,15 +278,15 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 **Consequences/risks:** set Baritone's denylist to all registered block types minus the natural allowlist everywhere; free-zone and own-placement exceptions belong only to our guarded `break_block` skill path, not Baritone's type-based planner. [D-26, D-49] [Breaking settings][baritone-protect] [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java) `[VERIFY]` verify the allowlist against the 26.3 registry and prove all agent break paths reject protected blocks outside zones unless they are unchanged tracked agent placements. [D-26, D-49, D-38]
 
-## D-27 — Cache-based mining with accepted appearance risk
+## D-27 — Original mining policy (superseded)
 
-**Decision:** retain `legitMine=false`; accept the x-ray-like appearance risk rather than switching to exposed-only mining. [D-27]
+**Decision:** **Superseded by D-50 on 2026-10-04.** The original hidden-target mining policy is retired; ore acquisition now uses legit branch-mining at the selected Y for the first requested mineral. Non-ore collection still uses the loaded-chunk scan. [D-27, D-50]
 
-**Alternatives considered:** `legitMine=true`; conservative exposed-block collection. [D-27]
+**Alternatives considered:** exposed-only collection; the original policy, since removed by D-50. [D-27, D-50]
 
-**Evidence:** Baritone documents `legitMine=false` and says enabling it avoids looking like x-raying; its mining search reads cached locations for tracked block types and can supplement them with a world scan. Issue #891 reports Matrix kicks with `#mine oak_log`. [Mining setting][baritone-legit] [Cache search][baritone-cache-search] [Historical report][baritone-891]
+**Evidence:** the initial policy relied on Baritone's mining settings and search behavior. D-50 records the live anti-xray census and the distinction between tracked cached blocks and untracked ores. [Mining setting][baritone-legit] [Mining search][baritone-cache-search] [D-50]
 
-**Consequences/risks:** `[INFERENCE]` this increases public-server anti-cheat exposure; the historical report is not proof of a current 26.3 defect or of RayCraft's configuration. [D-27, D-02] [Historical report][baritone-891] `[VERIFY]` obtain server approval for this mining behavior and stop on staff/ban responses. [D-27, D-34]
+**Consequences/risks:** D-50 replaces the mining mechanism, not the requirement for server permission or moderation-aware stops. [D-27, D-50, D-02, D-34]
 
 ## D-28 — Sprint and parkour enabled
 
@@ -330,13 +330,13 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 ## D-32 — Java reflex core plus TypeScript intents
 
-**Decision:** implement client-tick Java eat/hazard-escape/fight-back reflexes at 20 Hz, with non-blocking TypeScript `onTick` intents around 5–10 Hz; default `reflex.eatAtFood=14`. [D-32, D-25]
+**Decision:** implement client-tick Java eat/hazard-escape/fight-back reflexes at 20 Hz, extended by D-52 with `flee_creeper`, with non-blocking TypeScript `onTick` intents around 5–10 Hz; default `reflex.eatAtFood=14`. [D-32, D-25, D-52]
 
 **Alternatives considered:** controller-only reflexes; model-only survival decisions. [D-32]
 
 **Evidence:** Fabric supplies client tick callbacks, while Mindcraft's modes prioritize preservation and defense; the model probe measures second-scale rather than per-tick responses. [Tick hook][fabric-tick] [Modes][mindcraft-modes] [Probe](evidence/vllm-capability-probe.json.txt)
 
-**Consequences/risks:** reflexes survive controller failure, remaining active under console/lease pauses but disabled under human takeover. Beginning a reflex cancels MCP/Baritone work and Baritone stays canceled every tick while it runs; the controller replans after ≥1.5 s since the last `qc.reflex` plus `usingItem=false`. This settling rule is a heuristic, not a completion event. `[VERIFY]` prove live hazard/retaliation/physical-pause behavior. [D-32, D-11, D-20, D-38] [mod/src/main/java/dev/qwencraft/control/Reflexes.java](../mod/src/main/java/dev/qwencraft/control/Reflexes.java) [controller/main.ts](../controller/main.ts)
+**Consequences/risks:** reflexes survive controller failure, remaining active under console/lease pauses but disabled under human takeover. Beginning a reflex cancels MCP/Baritone work and Baritone stays canceled every tick while it runs; the controller replans after ≥1.5 s since the last `qc.reflex` plus `usingItem=false`. This settling rule is a heuristic, not a completion event. `[VERIFY]` prove live hazard/creeper/retaliation/physical-pause behavior. [D-32, D-52, D-11, D-20, D-38] [mod/src/main/java/dev/qwencraft/control/Reflexes.java](../mod/src/main/java/dev/qwencraft/control/Reflexes.java) [controller/run.ts](../controller/run.ts)
 
 ## D-33 — Small durable memory
 
@@ -434,7 +434,7 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 **Evidence:** Fabric exposes JOIN and DISCONNECT callbacks, providing lifecycle signals for the controller's chosen accounting; the callback API does not implement the counter or moderation classification. [Connection lifecycle][fabric-connection]
 
-**Consequences/risks:** `reconnect.maxPerHour=3` retains its contract spelling but means this reset policy, not a sliding window. The counter and stable timer are in memory only: controller restart resets them; this is not a persistent cross-process rate bound. Ban/staff-kick stop patterns still prohibit retry. `[VERIFY]` exercise three reconnects, a fourth pre-reset disconnect, uninterrupted one-hour stability and console `resume` on RayCraft. [D-41, D-34, D-24, D-38] [controller/main.ts](../controller/main.ts)
+**Consequences/risks:** `reconnect.maxPerHour=3` retains its contract spelling but means this reset policy, not a sliding window. The counter and stable timer are in memory only: controller restart resets them; this is not a persistent cross-process rate bound. Ban/staff-kick stop patterns still prohibit retry. `[VERIFY]` exercise three reconnects, a fourth pre-reset disconnect, uninterrupted one-hour stability and console `resume` on RayCraft. [D-41, D-34, D-24, D-38] [controller/run.ts](../controller/run.ts)
 
 ## D-42 — Controller owns verified task completion
 
@@ -462,17 +462,17 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 **Alternatives considered:** prompt-only withholding; also conceal in-game coordinates. Neither was selected. [D-44]
 
-**Evidence:** shared `redact` supplies chat-policy sends before splitting, console `say`, command-tool text and harness-search snippets; repository-relative source references remain discussable. [controller/selfinfo.ts](../controller/selfinfo.ts) [controller/chat-policy.ts](../controller/chat-policy.ts) [controller/main.ts](../controller/main.ts) [controller/skills.ts](../controller/skills.ts)
+**Evidence:** shared `redact` supplies chat-policy sends before splitting, console `say`, command-tool text and harness-search snippets; repository-relative source references remain discussable. [controller/selfinfo.ts](../controller/selfinfo.ts) [controller/chat-policy.ts](../controller/chat-policy.ts) [controller/run.ts](../controller/run.ts) [controller/skills.ts](../controller/skills.ts)
 
 **Consequences/risks:** replace matches with `[redacted]`; reject a private recipient if redaction would change its name rather than silently redirecting the message. In-game coordinate triples remain available for honest state discussion. [D-44, D-36] [controller/chat-policy.ts](../controller/chat-policy.ts)
 
 ## D-45 — About-me summary and `harness_info`
 
-**Decision:** append a short curated about-me summary to the system prompt and add the 28th curated tool, `harness_info(question:string)`, for redacted repository-doc/code lookup. Date: 2026-10-04; source: operator build adjudication. [D-45]
+**Decision:** append a short curated about-me summary to the system prompt and add `harness_info(question:string)` for redacted repository-doc/code lookup. D-51 leaves 27 curated tools after removing the timer action. Date: 2026-10-04; source: operator build adjudication. [D-45, D-51]
 
 **Alternatives considered:** preload the whole repository into every turn; rely only on a static summary. The chosen summary plus on-demand search bounds the context. [D-45]
 
-**Evidence:** `ABOUT_ME` lives in `controller/selfinfo.ts`; search covers `docs/*.md` (not evidence), controller/heuristic TypeScript and companion Java, returning the top three snippets within 1,500 characters, prefixed by repo-relative filenames and redacted. `tools.ts` exposes 28 tools; the loop permits `harness_info` on chat-only turns. [controller/selfinfo.ts](../controller/selfinfo.ts) [controller/tools.ts](../controller/tools.ts) [controller/loop.ts](../controller/loop.ts)
+**Evidence:** `ABOUT_ME` lives in `controller/selfinfo.ts`; search covers `docs/*.md` (not evidence), controller/heuristic TypeScript and companion Java, returning the top three snippets within 1,500 characters, prefixed by repo-relative filenames and redacted. `tools.ts` exposes 27 tools under D-51; the loop permits `harness_info` on chat-only turns. [controller/selfinfo.ts](../controller/selfinfo.ts) [controller/tools.ts](../controller/tools.ts) [controller/loop.ts](../controller/loop.ts)
 
 **Consequences/risks:** lookup answers harness questions without shell/code execution; the observation, not a source snippet, establishes current gameplay state. [D-45, D-43, D-44, D-09, D-42]
 
@@ -516,13 +516,55 @@ Implementation contracts: [architecture](10-architecture.md), [companion mod](20
 
 **Consequences/risks:** persist entries `{server,dimension,x,y,z,id}` in `<gameDir>/config/qwencraft-placed.json`, load on join, and save changes atomically; `server` is the joined `host:port` and `id` is the namespaced block id observed after placement. Lazily drop entries whose current block id differs; remove a tracked entry on successful break. The guard permits natural blocks, free-zone blocks, or an unchanged tracked placement while the agent is active. `qc.placed.near` exposes nearby tracked placements to observation `ownBlocksNearby`; the model uses `break_block` to dig out. Baritone remains type-based (`blocksToDisallowBreaking`) and cannot route through own non-natural blocks; do not widen its denylist to grant permission over other players' builds. Tracking is not general ownership detection, nor does it remove D-26's natural-type/zone protection limits. [D-49, D-26] [Companion contract](20-companion-mod.md#9-protection-and-baritone-settings) [Controller observation](30-controller.md#5-observation-schema)
 
-Related fixes already shipped in commit `a871634`: controller jobs end after `MAX_PATH_FAILURES=5` consecutive Baritone path-calculation failures rather than waiting for the 120-second budget; `settings.logger` in `BaritoneFeature` sends status/failure lines to the game log instead of the chat HUD. These bound/report the failure but do not grant permission to dig through the shelter. [controller/skills.ts](../controller/skills.ts) [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java)
+Related fixes already shipped in commit `a871634`: controller jobs end after `MAX_PATH_FAILURES=5` consecutive Baritone path-calculation failures; `settings.logger` in `BaritoneFeature` sends status/failure lines to the game log instead of the chat HUD. D-51 adds progress-based stall detection and a larger ore budget; these bound/report failure but do not grant permission to dig through the shelter. [D-51] [controller/skills.ts](../controller/skills.ts) [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java)
+
+## D-50 — Legit branch-mining at the best Y per ore
+
+**Decision:** use legit branch-mining at the selected Y per ore; supersedes D-27. Date: 2026-10-04. Operator: “he's been mining for awhile and hasnt found any iron... i think the 'xray' heuristic isnt working properly.” [D-50, D-27]
+
+**Alternatives considered:** auto-detect the mining policy per server; keep x-ray targeting. Neither is selected. [D-50]
+
+**Evidence:** the orchestrator's read-only RayCraft census at (-1599, 63, 8649), radius 12 over all ore ids, returned 500 ores (truncated) evenly spread across types at y=55–62, including 72 diamond and 40+ deepslate variants; 60/60 sampled iron ores were fully enclosed. Paper anti-xray fake-ore mode makes hidden targets false data until exposed. Baritone v1.20.0 `MineProcess.searchWorld` uses `scanChunkRadius` for untracked blocks; `CachedChunk.BLOCKS_TO_KEEP_TRACK_OF` contains no ores. With `legitMine=true`, it mines visible/reachable ore or branch-mines at `legitMineYLevel` (upstream default -59). These are orchestrator-verified investigation facts, not a completed mining acceptance run. [D-50] [Mining search][baritone-cache-search] [Mining settings][baritone-legit]
+
+**Consequences/risks:** unchanged `qc.baritone.mine{blocks,targetCount}` wire contract. If every id ends `_ore` or is `minecraft:ancient_debris`, use `legitMine=true` and the first mineral's Y: coal 96, copper 48, iron 16, gold -16, redstone -58, lapis 0, diamond -58; `deepslate_` shares the mineral. Emerald, nether gold/quartz, ancient debris and other ores use the player's current block Y. Any non-ore request uses `legitMine=false` and the loaded-chunk scan, appropriate for real logs/sand/stone data. Startup defaults are true/16. Protection and home bounds remain unchanged; `[VERIFY]` prove iron progress at y=16 and inventory postconditions. [D-50, D-26, D-37, D-42] [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java)
+
+Ore acquisition also bypasses nearby fake-ore scanning/block probing: controller preflight checks/selects the best inventory pickaxe using static harvest tiers, failing explicitly when the required tier is missing. Non-ore scan/protection/harvest checks remain unchanged. [D-50, D-26] [controller/skills.ts](../controller/skills.ts)
+
+## D-51 — No idling except Qwen inference
+
+**Decision:** remove the `wait` tool, leaving exactly 27 tools; active goals immediately wake `continue` instead of parking between actions. Date: 2026-10-04. Operator: “the client shows 'running wait' a lot and gets blown up by creepers frequently... the only reason the agent should sit idle is to wait for qwen inference.” [D-51]
+
+**Alternatives considered:** retain a timer action; depend on a later event to replan. Both allow the observed unnecessary inactivity. [D-51]
+
+**Evidence:** transcript `2026-10-05T04-08-21` showed an interrupted `mine` result discarded as an obsolete generation, followed by the model assuming “task t8 is already running” and selecting 20–30 seconds of inactivity. A no-tool reply with an instruction also stalled until another event. Separately, `MovementHelper.avoidBreaking` called list `contains` per path node over ~1,100 disallowed types within Baritone's 500/2000 ms path timeouts; the live log showed five iron-path blacklists in 10 seconds. [D-51] [controller/loop.ts](../controller/loop.ts) [controller/skills.ts](../controller/skills.ts)
+
+**Consequences/risks:** every reply must call a tool or finish the goal. A tool owns its task through completion; interrupted, obsolete-generation or no-dispatch results mean STOPPED, not background work. When current/unpaused and an instruction or home exists, no-tool replies and completed chat-only turns immediately queue `continue`; unanswered chat instead queues `chat`. No instruction and no home means `Idle`. A previous no-tool reply receives the next-action/finish-goal nudge. Ore `mine`/`collect` requests (any id ending `_ore`) receive `min(15 min,max(5 min,count×40 s))`; any job fails with `stalled: no movement or inventory change for 45 s` if neither ≥1-block movement nor target-count change occurs. Keep the five-path-failure exit. The mod's read-only no-break list retains identical contents but uses a HashSet-backed O(1) `contains`, avoiding per-node linear scans without widening guards. [D-51, D-20, D-26, D-31] [controller/tools.ts](../controller/tools.ts) [controller/skills.ts](../controller/skills.ts) [mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java](../mod/src/main/java/dev/qwencraft/baritone/BaritoneFeature.java)
+
+## D-52 — Creeper flee reflex
+
+**Decision:** add Java `flee_creeper` ahead of retaliation/eating and below hazard escape. Date: 2026-10-04. Operator: “the client shows 'running wait' a lot and gets blown up by creepers frequently... the only reason the agent should sit idle is to wait for qwen inference.” [D-52, D-32]
+
+**Alternatives considered:** hit creepers; no creeper reflex. Fleeing is the conservative response to the operator's repeated explosions. [D-52]
+
+**Evidence:** the operator reports frequent creeper deaths while the controller stands still; local client-tick reflexes avoid an inference round trip. This observation motivates the reflex, not a claim that its live survival acceptance has passed. [D-52, D-51, D-32]
+
+**Consequences/risks:** a creeper within 5.0 blocks that is fusing (swelling >0 or swell direction >0) or closer than last tick triggers facing horizontally away, forward+sprint, and jump if horizontally blocked. End and release keys at ≥8.0 blocks, disappearance, or 5 seconds. Start emits `qc.reflex{name:"flee_creeper",action:"sprinting away"}`; cancel Baritone every tick while active. Priority is escape > flee_creeper > retaliate > eat. Existing enable/human-takeover rules and controller settling heuristic remain unchanged. `[VERIFY]` exercise trigger, key release, priority and takeover. [D-52, D-11, D-20, D-32] [mod/src/main/java/dev/qwencraft/control/Reflexes.java](../mod/src/main/java/dev/qwencraft/control/Reflexes.java)
+
+## D-53 — Goal-preserving controller restart
+
+**Decision:** reserve console `restart` to reload controller code, config and heuristics while preserving instruction, goal stack and active/paused intent. Date: 2026-10-04. Operator: “add a restart command to the controller that preserves the active goal state but reloads everything else so our code fixes go live without me needing to take down and restart the process manually.” [D-53]
+
+**Alternatives considered:** manual quit/relaunch and goal re-entry; in-process partial module reload. The selected process restart reloads the controller without replaying stale tasks. [D-53, D-20]
+
+**Evidence:** `controller/main.ts` is the supervisor; the former controller entrypoint is `controller/run.ts`. Supervisor relaunches `run.ts` only for `RESTART_EXIT_CODE=75`, exported by `controller/types.ts`. [controller/main.ts](../controller/main.ts) [controller/run.ts](../controller/run.ts) [controller/types.ts](../controller/types.ts)
+
+**Consequences/risks:** write `controller-restart.json` beside `config.paths.notesFile` with `{savedAt:<ms>,instruction:string|null,goals:string[],active:boolean}`, where active is `!operatorPaused`; then perform normal quit cleanup and exit 75. Print `Restarting controller (code, config and heuristics reload; Java mod changes still need a Minecraft restart).` Startup consumes/deletes the file, restores state only within 10 minutes, and uses normal resume/activation automatically if active, printing `Restored after restart: <instruction or 'self-goal'>; resuming.` Otherwise print `Restored after restart (paused).` Malformed/stale files are deleted, ignored and reported. Goal restoration does not restore tasks/history/reconnect accounting. Java changes still require replacing the built mod with Minecraft closed and restarting Minecraft. `[VERIFY]` prove active/paused restoration and stale-file rejection. [D-53, D-11, D-20, D-41] [controller/run.ts](../controller/run.ts) [controller/console.ts](../controller/console.ts)
 
 ## Tensions accepted by the operator
 
 | Tension | Accepted consequence and boundary |
 |---|---|
-| Third-party main-account testing + cache-based mining + parkour [D-02, D-27, D-28] | `[INFERENCE]` the combination increases anti-cheat/ban exposure compared with conservative sanctioned testing; owner approval and actual plugin behavior remain unverified. [Historical Matrix report][baritone-891] [X-ray appearance note][baritone-legit] [Parkour default][baritone-parkour] [Automation warning][litematica] |
+| Third-party main-account testing + legit ore mining + parkour [D-02, D-50, D-28] | `[INFERENCE]` automation still has anti-cheat/ban exposure; legit mining avoids fake hidden-ore targets, not the need for owner approval or actual plugin acceptance. [Historical Matrix report][baritone-891] [Parkour default][baritone-parkour] [Automation warning][litematica] |
 | Auto-reconnect versus moderation-aware bounds [D-24, D-34, D-41] | Recovery is not unlimited: configured delays permit at most three reconnects, reset only after one hour without disconnect; a fourth pre-reset disconnect requires console `resume`, and ban/staff-kick patterns prohibit retry. Callback availability does not identify moderation intent. [D-41, D-34] [Connection callbacks][fabric-connection] |
 | Addressed chat versus terminal-only task authority [D-48, D-17, D-05] | Treat chat as conversational data even when addressed or apparently friendly; non-addressed lines remain context only, and metadata can be absent. Mindcraft's public-server warning specifically concerns code-enabled bots vulnerable to injection, a risk precedent rather than a tested qwencraft exploit. [Identity limits][fabric-chat] [Code-enabled warning][mindcraft-readme] |
 | Convenience versus profile isolation [D-12] | `[INFERENCE]` a shared `.minecraft` gameDir also shares `mods/` with other Fabric profiles using that directory; inspect profile configuration before adding the stack. [Observed gameDir](evidence/client-process.txt) [Installer profile][installer-profile] |

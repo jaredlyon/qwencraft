@@ -78,7 +78,7 @@ Prerequisites: Node 24.12+, the checked-in Gradle wrapper/vendor JARs, and JDK 2
    node main.ts --config ../bench/qwencraft.bench.json
    ```
 
-   It starts paused. In **this controller terminal**, enter:
+   `main.ts` supervises the controller in `run.ts`. A fresh launch without a valid restart snapshot starts paused. In **this controller terminal**, enter:
 
    ```text
    resume
@@ -95,6 +95,10 @@ Prerequisites: Node 24.12+, the checked-in Gradle wrapper/vendor JARs, and JDK 2
 
    `home set` records the current client position; it is not `/sethome`. The default horizontal home radius is 256 blocks. The initial natural-block list is a starting allowlist to review, not permission to break any crafted block. Activation and control changes produce no lifecycle chat. Bench configuration uses `chat.nicknames=["QwenBench"]` (case-insensitive substring) and `chat.wholeWords=["jared"]` (case-insensitive whole word); whispers always count as addressed. Other players see chat only when Jared types in-game himself (or uses unchanged controller-console `say <text>`) or the agent replies to an incoming non-self addressed message. Code rejects agent chat tools unless the current request contains an incoming non-self `player` event with `mentionsMe=true` or a `whisper` in observation `recentChat` or pending `mustReply`. Non-addressed chat remains context only for the next turn and does not wake the model; allowlisted commands such as `/home` remain separate. [D-48](../docs/00-decisions.md#d-48--addressed-only-agent-chat) [D-47](../docs/00-decisions.md#d-47--reply-only-agent-chat)
 
+   Enter `restart` here to reload controller code/config/heuristics without retyping the goal. It saves instruction, goal stack and active/paused intent in `controller-restart.json` beside the bench notes file, performs quit cleanup, exits 75 and is relaunched by `main.ts`. A valid snapshot within 10 minutes is consumed/deleted: active intent auto-resumes, paused intent stays paused; malformed/stale state is ignored/reported. **Java changes still need rebuilding/replacing the mod and restarting Minecraft.** [Restart contract](../docs/30-controller.md#9-console-contract)
+
+   Actionable instruction/home goals immediately continue between turns; the registry has 27 tools and no timer action. Ore-only mining uses the [legit per-mineral Y table](../docs/20-companion-mod.md#9-protection-and-baritone-settings), including iron y=16, while logs/sand/stone retain loaded-chunk scans. Ore acquisition budgets are `min(15 min,max(5 min,count×40 s))`; any job fails after 45 seconds with no ≥1-block movement or target-count change, keeping the five-path-failure exit. Java priority is escape > flee_creeper > retaliate > eat. These are current policies, not new observed bench results. [D-50…D-53](../docs/00-decisions.md#d-50--legit-branch-mining-at-the-best-y-per-ore)
+
 ## Local checks and shutdown
 
 Run these from `D:/qwencraft` in Terminal B while the client/controller remain visible:
@@ -105,6 +109,8 @@ node --% bench/rpc.ts events.getRecent "{\"limit\":100,\"sinceId\":0}"
 ```
 
 For conversation checks, have a consenting second player join the loopback bench: first send `What are you doing?` publicly and confirm no model wake/reply, then ask `QwenBench, are you an AI?`, repeat with `Jared, what are you doing?`, and privately ask without either name. The addressed public questions and whisper should receive public/private replies respectively; the unaddressed question stays observation `recentChat` context for the next turn. RCON `say` is system text, not a player message that authorizes agent chat. Check actual replies, events, inventory changes and motion, not merely successful RPC submission. Confirm a chat tool attempt without a current-request incoming non-self addressed message returns `{ok:false, summary:"chat is only for replying to a message that mentions you"}` without sending. Test F8 and physical input takeover while supervised. In the controller terminal, `stop` releases agent actions; `resume` explicitly rearms them; `quit` pauses/releases and exits. None produces lifecycle chat. F8/manual input also disable Java reflexes; console/dead-man pauses leave survival reflexes enabled. Do stop/dead-man checks in a safe full-food location.
+
+For fix-wave checks, record legit iron progress at y=16, a no-tool reply's immediate `continue`/nudge, active restart preserving goals and auto-resuming, paused restart remaining paused, and creeper-flee trigger/key release (within 5 blocks fusing/approaching; stop at ≥8 blocks/gone/5 seconds). Follow the [pending verification procedures](../docs/50-install-and-verification.md#5-staged-raycraft-bring-up); do not treat successful RPC submission or a restart message as gameplay proof.
 
 Shutdown order: enter `quit` in Terminal D, close the development Minecraft client in Terminal C, then stop Paper from Terminal B:
 

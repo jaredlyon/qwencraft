@@ -5,6 +5,7 @@ import type { Vec3 } from './types.ts';
 export interface ConsoleHandlers {
   instruction(text: string): void | Promise<void>;
   stop(): void | Promise<void>; resume(): void | Promise<void>; status(): void | Promise<void>;
+  restart(): void | Promise<void>;
   homeSet(): void | Promise<void>;
   zoneAdd(name: string, min: Vec3, max: Vec3): void | Promise<void>;
   zoneRemove(name: string): void | Promise<void>;
@@ -33,6 +34,7 @@ export function startConsole(handlers: ConsoleHandlers): () => void {
         case 'resume': await handlers.resume(); return;
         case 'status': await handlers.status(); return;
         case 'home set': await handlers.homeSet(); return;
+        case 'restart': await handlers.restart(); return;
         case 'quit': await handlers.quit(); return;
       }
       if (text.startsWith('say ')) {await handlers.say(text.slice(4)); return;}
@@ -49,7 +51,7 @@ export function startConsole(handlers: ConsoleHandlers): () => void {
         }
         throw new Error('Usage: zone add <name> x1 y1 z1 x2 y2 z2 | zone rm <name>');
       }
-      if (['stop','resume','status','home','say','quit'].includes(parts[0]!)) throw new Error(`Invalid reserved command: ${parts[0]}`);
+      if (['stop','resume','status','home','say','quit','restart'].includes(parts[0]!)) throw new Error(`Invalid reserved command: ${parts[0]}`);
       await handlers.instruction(text);
     })().catch(error => handlers.error(error instanceof Error ? error.message : 'Console command failed'));
   });

@@ -13,7 +13,7 @@ The client-side `qwencraft` mod adds the following harness responsibilities rath
 | Terrain navigation | MCPFabric documents no swimming, ladders, pillaring, or tunnelling in its walker; use Baritone typed processes for harness navigation. [MCPFabric limits][M-limits] [D-08] |
 | Identity-rich chat | MCPFabric's Fabric callbacks receive but discard `signedMessage` and export only sender name/text; capture the richer Fabric callback directly. [callback][M-chat-hook], [client export][M-chat-events] [D-14] |
 | Operator control | Add F8, physical-input takeover, console pause, and dead-man lease around existing stop primitives. [stop primitive][M-control] [D-11, D-35] |
-| Immediate survival | Existing sustained-use and attack primitives are not the harness's autonomous survival policy; put eat/escape/fight-back reflexes in Java. [use primitive][M-control], [interaction surface][M-interact] [D-32] |
+| Immediate survival | Put eat/hazard-escape/creeper-flee/fight-back reflexes in Java; existing sustained-use and attack primitives are not the autonomous survival policy. [use primitive][M-control], [interaction surface][M-interact] [D-32, D-52] |
 | Hard guards | Add natural-block/zone/own-placement checks, chat limits, and command allowlist at agent execution boundaries, not merely in model prompts. [D-10, D-18, D-26, D-49, D-29, D-36] |
 | Watch and recovery | Add client HUD, death/join/disconnect observations, respawn, and bounded reconnect primitives. [D-23, D-24, D-34] |
 
@@ -58,14 +58,14 @@ The controller sends POST `/rpc` with `{method,params}` and receives `{ok:true,r
 
 ## 4. RPC contract
 
-All params/results below describe the implemented companion interface; `started` means accepted, not completed, and no row creates a second LLM-facing tool API. MCPFabric's bridge serialization omits members whose value is `JsonNull`: nullable contract fields such as status `taskId`/`kind`/`lastPathEvent`, chat `senderUuid`/`senderName`, and pause `reason` can be absent on the wire. Consumers must treat missing keys as null, as the controller does. [Qc-baritone] [Qc-guards] [Qc-control] [controller/main.ts](../controller/main.ts) [D-07, D-09, D-20]
+All params/results below describe the companion interface; `started` means accepted, not completed, and no row creates a second LLM-facing tool API. MCPFabric's serialization omits `JsonNull` members: nullable status `taskId`/`kind`/`lastPathEvent`, chat `senderUuid`/`senderName`, and pause `reason` can be absent. Consumers treat missing keys as null. [Qc-baritone] [Qc-guards] [Qc-control] [controller/run.ts](../controller/run.ts)
 
 `PauseReason = "hotkey" | "manual_input" | "lease_expired" | "console"`. [D-11, D-35]
 
 | Method | Exact params | Exact result | Behavior / backing API |
 |---|---|---|---|
 | `qc.baritone.goto` | `{x:number,y?:number,z:number,range?:number}` | `{started:true,taskId:string}` | `ICustomGoalProcess.setGoalAndPath`: y + range → `GoalNear`; y without range → `GoalBlock`; y omitted → `GoalXZ`, ignoring range. [goal process][B-goal], [XZ][B-xz], [near][B-near], [block][B-block] [D-08] |
-| `qc.baritone.mine` | `{blocks:string[],targetCount:number}` | `{started:true,taskId:string}` | `IMineProcess.mineByName(targetCount, blocks...)`; count is desired final matching inventory count, not new blocks broken. [interface][B-mine], [implementation][B-mine-impl] [D-08, D-27] |
+| `qc.baritone.mine` | `{blocks:string[],targetCount:number}` | `{started:true,taskId:string}` | `IMineProcess.mineByName(targetCount, blocks...)`; desired final matching inventory count, not newly broken blocks. Ore-only calls select legit branch-mining at the first mineral's Y (§9); non-ore calls use loaded-chunk scanning. [interface][B-mine], [implementation][B-mine-impl] [D-08, D-50] |
 | `qc.baritone.follow` | `{player:string}` | `{started:true,taskId:string}` | `IFollowProcess.follow(Predicate<Entity>)`; the mod resolves the name against loaded client players and returns error code `player_not_loaded` for an unknown/unloaded player. Both `go_to_player` and `follow_player` use this RPC; approach stops within 3 blocks. [Qc-baritone] [controller/skills.ts](../controller/skills.ts) [D-08, D-09] |
 | `qc.baritone.explore` | `{x:number,z:number}` | `{started:true,taskId:string}` | `IExploreProcess.explore(centerX,centerZ)`. [explore interface][B-explore] [D-08, D-19] |
 | `qc.baritone.stop` | `{}` | `{stopped:true}` | Cancel current Baritone task via `IPathingBehavior.cancelEverything`; does not itself toggle harness pause. [pathing interface][B-pathing] [D-08, D-20] |
@@ -105,7 +105,7 @@ These are event `data` contracts; MCPFabric supplies the outer event id/type/gam
 | Baritone observation | Implemented `qc.task.state` | Interpretation |
 |---|---|---|
 | `AT_GOAL` | `at_goal` | Goal signal; the controller verifies position before declaring completion. [path enum][B-path-events] [D-08, D-09, D-42] |
-| `CALC_FAILED` / `NEXT_CALC_FAILED` | `calc_failed` | Diagnostic calculation failure; mining may retry, but controller jobs stop after 5 consecutive failures (`MAX_PATH_FAILURES`) instead of waiting for the 120-second budget. Shipped in `a871634`. [controller/skills.ts](../controller/skills.ts) [path enum][B-path-events], [mine implementation][B-mine-impl] [D-08, D-42, D-49] |
+| `CALC_FAILED` / `NEXT_CALC_FAILED` | `calc_failed` | Diagnostic calculation failure; mining may retry, but controller jobs stop after 5 consecutive failures (`MAX_PATH_FAILURES`). D-51 also bounds no-progress stalls and extends ore acquisition deadlines. [controller/skills.ts](../controller/skills.ts) [path enum][B-path-events], [mine implementation][B-mine-impl] [D-08, D-42, D-49, D-51] |
 | `CANCELED` / explicit task cancellation | `canceled` | Cancellation signal, not a completion verdict: mining also cancels when its inventory target is met, so the controller checks the postcondition. [path enum][B-path-events], [mine implementation][B-mine-impl] [D-20, D-42] |
 | Owned process becomes inactive or relinquishes control, detected by polling | `lost_control` | Each client tick polls `isActive()` and `mostRecentInControl()` for the owned process; no Baritone-internals mixins or `onLostControl` observer hook. The signal is not an outcome verdict. [Qc-baritone] [D-08, D-32, D-42] |
 
@@ -167,13 +167,14 @@ Run the reflex checks at nominal 20 Hz in the mod; use TypeScript `onTick` only 
 |---|---|
 | Eat | Food ≤ `reflex.eatAtFood` (default 14), edible item present: select/use food and stop use after the observed eating postcondition. [D-32] |
 | Escape | Lava/fire/drowning: interrupt ordinary work and attempt a safe escape using local observations. [D-32] |
+| `flee_creeper` | A creeper within 5.0 blocks is fusing (swelling >0 / swell direction >0) or approaching since last tick: face horizontally away and hold forward+sprint, jumping when horizontally blocked. Release at ≥8.0 blocks, disappearance, or 5 seconds; emit `qc.reflex{name:"flee_creeper",action:"sprinting away"}` at start. [D-52] |
 | Fight back | A hostile that damaged the player: defend against that attacker, not proactive attacks on nearby players. [D-17, D-32] |
 
 Reflexes preempt ordinary work: beginning a reflex cancels Baritone and MCPFabric movement/mining/navigation and releases held item/use/attack controls. Baritone is canceled and its override keys cleared every tick while a reflex runs; stale MCP work and competing action paths are gated. Retained jobs are not resumed; the controller replans after settling. [Qc-reflex] [Qc-control] [D-08, D-20, D-32]
 
 Reflexes run when `ReflexConfig.enabled=true`, except that hotkey/manual-input pause disables them; console/lease-expired pauses stop controller work but retain Java survival reflexes. [D-11, D-32] Test dead-man input release in a full-food, no-hazard spot, not by expecting reflexes to be disabled. [D-11, D-32, D-38]
 
-**V11 — Reflex execution resolved; live survival proof pending.** Priority is hazard escape, hostile-damage retaliation, then eating. Edible selection requires `FOOD` and `CONSUMABLE` components; retaliation uses the recent hostile damage source and vanilla range/cooldown checks. Human pause disables all reflexes. The controller's settling rule is at least 1.5 seconds after the last `qc.reflex` and `player.getState.usingItem=false`, not a mod completion event. [Qc-reflex] [controller/main.ts](../controller/main.ts) [D-11, D-17, D-32] [VERIFY] Exercise live hazard escape/retaliation and settling behavior; the timing heuristic is not proof every escape/fight has ended. [D-38]
+**V11 — Reflex execution; live survival proof pending.** Priority is escape > flee_creeper > retaliate > eat. Edible selection requires `FOOD` and `CONSUMABLE`; retaliation uses the recent hostile damage source and vanilla range/cooldown checks. Human pause disables all reflexes. Controller settling is ≥1.5 seconds after the last `qc.reflex` and `usingItem=false`, not a mod completion event. [Qc-reflex] [controller/run.ts](../controller/run.ts) [D-11, D-17, D-32, D-52] [VERIFY] Exercise hazard/creeper/retaliation priority, flee trigger/termination/key release, and takeover; settling is not proof every escape/fight ended. [D-38, D-52]
 
 ## 9. Protection and Baritone settings
 
@@ -187,12 +188,28 @@ Track successful block placements through `MultiPlayerGameMode.useItemOn` while 
 | `allowPlace` | `true` | Default true. [settings][B-basic-settings] [D-28] |
 | `allowSprint` | `true` | Default true. [settings][B-basic-settings] [D-28] |
 | `allowParkour` | `true` | Deliberate override: upstream default is false, not true. [settings][B-parkour-settings] [D-28] |
-| `legitMine` | `false` | Upstream describes enabling it to avoid looking like X-ray mining; keep the operator's accepted cache-based policy. [settings][B-mining-settings] [D-27] |
+| `legitMine` | Startup `true`; per call `true` for ore-only, otherwise `false` | Legit branch-mining exposes real ores rather than trusting Paper's fake hidden targets; non-ore logs/sand/stone still use loaded-chunk scanning. [Qc-baritone] [settings][B-mining-settings] [D-50] |
+| `legitMineYLevel` | Startup `16`; per ore table below | First requested mineral selects Y; `deepslate_` uses the same mineral. Other ores use the player's current block Y. [Qc-baritone] [D-50] |
 | `chatControl` | `false` | Disable ordinary chat-command interpretation; this does not alone disable `#` prefixed commands. [settings][B-chat-settings], [command interception][B-chat-control], [default prefix][B-prefix-settings] [D-05, D-08, D-10] |
 | `prefixControl` | `false` | Separately disable default `#` prefixed command interpretation; outgoing agent `#` text is also rejected by the guard. [command interception][B-chat-control], [default prefix][B-prefix-settings] [D-05, D-08, D-10] |
-| `blocksToDisallowBreaking` | All registered blocks minus `naturalBlocks` | Upstream defines this as blocks Baritone is not allowed to break. [settings][B-disallow-settings] [D-26] |
+| `blocksToDisallowBreaking` | All registered blocks minus `naturalBlocks`; read-only list with O(1) `contains` | Same protection contents; array/list-backed iteration plus HashSet-backed membership avoids ~1,100-element scans per path node within 500/2000 ms path-search timeouts. [Qc-baritone] [settings][B-disallow-settings] [D-26, D-51] |
 | `blocksToAvoidBreaking` | Retain upstream default | Crafting table, furnace, chest, trapped chest: avoidance is not the hard prohibition list. [settings][B-avoid-settings] [D-26] |
 | `logger` | `settings.logger` → `Qc.LOG.info("[Baritone] {}", message.getString())` | Status/failure lines go to the game log, not the chat HUD; shipped in `a871634`. [Qc-baritone] [D-47, D-49] |
+
+A call is ore-only when **every** block id ends `_ore` or is `minecraft:ancient_debris`; mixed/non-ore calls set `legitMine=false`. The first requested block sets the mineral/Y for the whole ore-only call. Baritone mines visible/reachable ore, otherwise branch-mines at that Y. These are selected harness levels, not automatic server/biome detection. [D-50] [Qc-baritone]
+
+| Mineral (normal/deepslate variants) | Legit mining Y |
+|---|---|
+| Coal | 96 |
+| Copper | 48 |
+| Iron | 16 |
+| Gold | -16 |
+| Redstone | -58 |
+| Lapis | 0 |
+| Diamond | -58 |
+| Emerald, nether gold, nether quartz, ancient debris, other ores | Player's current block Y |
+
+RayCraft's read-only census found fake enclosed ores across impossible mineral heights under Paper anti-xray; only exposure supplies real ore data. Baritone's untracked ore search scans loaded chunks, not an ore cache (`BLOCKS_TO_KEEP_TRACK_OF` has no ores). D-50 supersedes D-27; no wire fields were added. Controller ore acquisition budgets and 45-second movement/inventory stall rule are in [30-controller.md](30-controller.md#4-curated-tools-and-deterministic-skills). [D-50, D-51]
 
 Baritone's block-type disallow list cannot encode coordinates; keep it restrictive even inside free zones or for tracked placements. Baritone cannot route through its own non-natural placed blocks: the model must inspect `ownBlocksNearby` and dig out with `break_block`, rather than retrying the same blocked path. Zone-only breaking likewise uses the companion-guarded skill path. [disallow setting][B-disallow-settings] [D-26, D-49] [Controller](30-controller.md#5-observation-schema) [INFERENCE] A natural-block allowlist still cannot distinguish placed natural blocks from world generation, so tracking adds a narrow exception, not general ownership detection. [D-26, D-49]
 
@@ -202,7 +219,7 @@ Home radius is a controller-only phase-1 bound measured by horizontal x/z distan
 
 **V13 — Baritone chat interception implemented.** Both `chatControl=false` and `prefixControl=false` are applied; priority-700 outgoing mixins reject agent `#` text before Fabric/Baritone interception. The local bench observed command allowlist and `#` rejection; [VERIFY] repeat under the live client stack. [Qc-baritone] [Qc-chat-mixin] [Local bench results](50-install-and-verification.md#local-bench--observed-2026-10-04) [D-05, D-08, D-10, D-38]
 
-The mining and movement selections are not an anti-cheat guarantee: historical reports describe Matrix kicks from mining and rotation-related flags, not verified 26.3 RayCraft failures. [Matrix report](https://github.com/cabaletta/baritone/issues/891), [rotation report](https://github.com/cabaletta/baritone/issues/4018) [D-02, D-27, D-28]
+Legit ore mining and movement settings are not an anti-cheat guarantee: historical reports describe Matrix mining kicks and rotation flags, not verified 26.3 RayCraft failures. [Matrix report](https://github.com/cabaletta/baritone/issues/891), [rotation report](https://github.com/cabaletta/baritone/issues/4018) [D-02, D-50, D-28]
 
 ## 10. HUD and session lifecycle
 

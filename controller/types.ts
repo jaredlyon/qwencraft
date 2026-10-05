@@ -1,5 +1,7 @@
 /** AbortSignal reason used when a Java reflex took the body: skills must stop work but not send body-release RPCs. */
 export const REFLEX_OWNS_BODY = "reflex-owns-body";
+/** Exit code run.ts uses for console `restart`; main.ts relaunches run.ts when it sees it. */
+export const RESTART_EXIT_CODE = 75;
 
 // Shared cross-module contracts for the qwencraft controller. Erasable TypeScript only (Node type stripping):
 // no enums, namespaces, parameter properties or decorators anywhere in controller/ or heuristics/.

@@ -8,11 +8,13 @@ Other players see chat only when Jared types in-game himself (or uses unchanged 
 
 The active agent may break its own tracked, unchanged placements; all placements during any pause are human and not tracked. `qc.placed.near` feeds observation `ownBlocksNearby`, and the model digs out of its own shelter with `break_block` because Baritone remains type-based and cannot route through own non-natural blocks. The existing natural-block/free-zone policy is otherwise unchanged. [D-49](00-decisions.md#d-49--agent-owned-block-breaking) · [Protection contract](20-companion-mod.md#9-protection-and-baritone-settings)
 
+Current fix-wave policy: 27 curated tools, immediate `continue` for actionable instruction/home goals, legit per-ore branch-mining (iron y=16), and Java `flee_creeper` below hazard escape. Launch `main.ts` (supervisor) → `run.ts` (controller); console `restart` preserves goals and active intent while reloading code/config/heuristics. Java changes still require Minecraft restart. The fix wave's live checks remain pending. [D-50…D-53](00-decisions.md#d-50--legit-branch-mining-at-the-best-y-per-ore) · [Verification](50-install-and-verification.md)
+
 ## Documents
 
 | File | Contents |
 |---|---|
-| [00-decisions.md](00-decisions.md) | Decision log D-00…D-49: what was chosen, which alternatives were considered, the evidence, and the tensions the operator accepted |
+| [00-decisions.md](00-decisions.md) | Decision log D-00…D-53: choices, alternatives, evidence and accepted tensions; D-27 superseded by D-50 |
 | [10-architecture.md](10-architecture.md) | Ground truth, process topology, layering, agent loop, latency budget, failure domains |
 | [20-companion-mod.md](20-companion-mod.md) | The `qwencraft` Fabric mod: Baritone RPCs, chat hook, stop controls, reflexes, protect guard, HUD |
 | [30-controller.md](30-controller.md) | The TypeScript controller: bridge client, LLM client, curated tools, observations, heuristics API, memory, console |

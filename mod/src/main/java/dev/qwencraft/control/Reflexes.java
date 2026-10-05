@@ -11,6 +11,7 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.Item;
@@ -18,14 +19,16 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** One owner, with escape > retaliation > eating. Completion always releases rather than revives work. */
+/** One owner, with escape > creeper flight > retaliation > eating. Completion releases rather than revives work. */
 final class Reflexes {
-	private enum Mode { NONE, ESCAPE, FIGHT, EAT }
+	private enum Mode { NONE, ESCAPE, FLEE_CREEPER, FIGHT, EAT }
 	private static Mode mode = Mode.NONE;
 	private static LocalPlayer owner;
 	private static boolean forward, jump;
 	private static BlockPos escapeTarget;
 	private static int nextEscapeScan;
+	private static Creeper fleeTarget;
+	private static long fleeStartedAt;
 	private static int previousSlot = -1, foodSlot = -1, swappedFrom = -1;
 	private static Item foodItem;
 	private static int initialCount, initialFood, startedTick;
@@ -57,6 +60,32 @@ final class Reflexes {
 					forward = true;
 				}
 			}
+			applyMovement(mc);
+			return;
+		}
+
+		if (mode == Mode.FLEE_CREEPER) {
+			if (!ControlRules.continueFleeCreeper(fleeTarget != null && fleeTarget.isAlive()
+					&& mc.level.getEntity(fleeTarget.getId()) == fleeTarget,
+					fleeTarget == null ? 0 : p.distanceToSqr(fleeTarget), System.nanoTime() - fleeStartedAt)) {
+				finish(mc, true);
+				return;
+			}
+		} else {
+			Creeper threat = findCreeper(mc, p);
+			if (threat != null) {
+				begin(mc, Mode.FLEE_CREEPER, "sprinting away");
+				fleeTarget = threat;
+				fleeStartedAt = System.nanoTime();
+			}
+		}
+		if (mode == Mode.FLEE_CREEPER) {
+			// Keep the current heading only when both entities have exactly the same horizontal position.
+			if (p.getX() != fleeTarget.getX() || p.getZ() != fleeTarget.getZ())
+				lookAt(p, 2 * p.getX() - fleeTarget.getX(), p.getEyeY(), 2 * p.getZ() - fleeTarget.getZ());
+			else p.setXRot(0);
+			forward = true;
+			jump = p.horizontalCollision;
 			applyMovement(mc);
 			return;
 		}
@@ -109,6 +138,22 @@ final class Reflexes {
 		if (!p.isUsingItem()) finish(mc, true);
 	}
 
+	private static Creeper findCreeper(Minecraft mc, LocalPlayer p) {
+		Creeper nearest = null;
+		double nearestDistance = Double.POSITIVE_INFINITY;
+		for (var entity : mc.level.entitiesForRendering()) {
+			if (!(entity instanceof Creeper creeper) || !creeper.isAlive()) continue;
+			double distance = p.distanceToSqr(creeper);
+			if (distance >= nearestDistance || distance > 25) continue;
+			double dx = p.xOld - creeper.xOld, dy = p.yOld - creeper.yOld, dz = p.zOld - creeper.zOld;
+			if (ControlRules.shouldFleeCreeper(distance, dx * dx + dy * dy + dz * dz, creeper.getSwelling(1), creeper.getSwellDir())) {
+				nearest = creeper;
+				nearestDistance = distance;
+			}
+		}
+		return nearest;
+	}
+
 	private static int findFood(LocalPlayer player) {
 		for (int slot = 0; slot < 36; slot++) {
 			ItemStack stack = player.getInventory().getItem(slot);
@@ -140,7 +185,7 @@ final class Reflexes {
 			mc.options.keyRight.setDown(false);
 			mc.options.keyJump.setDown(jump);
 			mc.options.keyShift.setDown(false);
-			mc.options.keySprint.setDown(false);
+			mc.options.keySprint.setDown(mode == Mode.FLEE_CREEPER);
 			mc.options.keyAttack.setDown(false);
 			mc.options.keyUse.setDown(mode == Mode.EAT);
 		});
@@ -165,6 +210,8 @@ final class Reflexes {
 		owner = null;
 		forward = jump = false;
 		escapeTarget = null;
+		fleeTarget = null;
+		fleeStartedAt = 0;
 		previousSlot = foodSlot = swappedFrom = -1;
 		foodItem = null;
 		ControlFeature.releaseKeys();

@@ -67,7 +67,6 @@ export const TOOLS: ToolDef[] = [
   define("recall", "Return matching notes with their context and age, or an explicit empty result.", { query: text }, ["query"]),
   define("set_goal", "Update the controller goal, not claim it achieved.", { text }, ["text"]),
   define("finish_goal", "Close a goal with a free-form summary after a successful recorded tool result, or start the summary with 'abandoned:' to abandon it.", { summary: text }, ["summary"]),
-  define("wait", "Wait an interruptible finite duration while events and lease continue.", { seconds: { type: "number", minimum: 0, maximum: 3600 } }, ["seconds"]),
   define("stop", "Stop all synthetic body actions and verify the task is inactive; does not pause the operator session."),
   define("harness_info", "Search redacted harness docs and code for honest answers about this agent.", { question: text }, ["question"]),
 ];
